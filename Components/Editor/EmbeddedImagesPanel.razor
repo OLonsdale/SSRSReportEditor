@@ -1,0 +1,88 @@
+@inject EditorState State
+
+<div style="width:100%;max-width:280px;box-sizing:border-box;padding:10px;font-size:.8rem;color:#d4d4d4;overflow:hidden;">
+    <div style="color:#999;text-transform:uppercase;font-size:.68rem;letter-spacing:.5px;margin-bottom:8px;">
+        Embedded images
+    </div>
+
+    @if (State.Report is null)
+    {
+        <div style="color:#888;">Load a report first.</div>
+    }
+    else
+    {
+        @foreach (var img in State.Report.EmbeddedImages)
+        {
+            <div style="border:1px solid #3c3c3c;border-radius:4px;padding:6px;background:#1e1e1e;margin-bottom:8px;max-width:100%;box-sizing:border-box;overflow:hidden;">
+                <div style="width:100%;height:100px;display:flex;align-items:center;justify-content:center;background:repeating-conic-gradient(#2a2a2a 0% 25%, #1e1e1e 0% 50%) 0/12px 12px;border-radius:3px;overflow:hidden;">
+                    <img src="@img.DataUrl" alt="@img.Name"
+                         style="max-width:100%;max-height:100px;width:auto;height:auto;display:block;object-fit:contain;" />
+                </div>
+                <div style="margin-top:6px;display:flex;gap:4px;align-items:center;max-width:100%;overflow:hidden;">
+                    <input value="@img.Name"
+                           style="flex:1;min-width:0;background:#1e1e1e;color:#d4d4d4;border:1px solid #3c3c3c;border-radius:3px;padding:2px 6px;font-size:.72rem;box-sizing:border-box;"
+                           @onchange="@(e => Rename(img, e.Value?.ToString() ?? img.Name))" />
+                    <button style="background:#5a1d1d;color:#fff;border:1px solid #7a2a2a;width:22px;height:22px;border-radius:3px;cursor:pointer;line-height:1;flex:0 0 auto;"
+                            @onclick="() => Remove(img.Name)" title="Delete">×</button>
+                </div>
+                <div style="margin-top:4px;color:#888;font-size:.65rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                    @img.MimeType · @((img.ImageData?.Length ?? 0) * 3 / 4 / 1024) KB
+                </div>
+            </div>
+        }
+
+        @if (!State.Report.EmbeddedImages.Any())
+        {
+            <div style="color:#888;font-size:.7rem;margin-bottom:8px;">No embedded images.</div>
+        }
+
+        <InputFile id="img-upload" OnChange="OnFileChosen"
+                   accept="image/png,image/jpeg,image/gif,image/bmp,image/x-icon"
+                   style="display:none" />
+        <label for="img-upload"
+               style="display:inline-block;background:#3c3c3c;color:#d4d4d4;border:1px solid #555;padding:4px 10px;border-radius:3px;cursor:pointer;font-size:.76rem;">
+            Add image…
+        </label>
+    }
+</div>
+
+@code {
+    private void Rename(EmbeddedImage img, string newName)
+    {
+        if (State.Report == null || string.IsNullOrWhiteSpace(newName)) return;
+        var old = img.Name;
+        State.Mutate(() =>
+        {
+            img.Name = newName;
+            foreach (var bi in State.Report.BodyItems)
+            {
+                if (bi is ImageItem im && im.Value == old) im.Value = newName;
+            }
+        });
+    }
+
+    private void Remove(string name)
+    {
+        if (State.Report == null) return;
+        State.Mutate(() => State.Report.RemoveEmbeddedImage(name));
+    }
+
+    private async Task OnFileChosen(InputFileChangeEventArgs e)
+    {
+        if (State.Report == null || e.File == null) return;
+        await using var stream = e.File.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        var b64 = Convert.ToBase64String(ms.ToArray());
+        var mime = string.IsNullOrEmpty(e.File.ContentType) ? "image/png" : e.File.ContentType;
+
+        var rawName = Path.GetFileNameWithoutExtension(e.File.Name);
+        var safe = new string(rawName.Where(c => char.IsLetterOrDigit(c) || c == '_').ToArray());
+        if (string.IsNullOrWhiteSpace(safe)) safe = "Image";
+        var existing = State.Report.EmbeddedImages.Select(ei => ei.Name).ToHashSet();
+        var unique = safe; var i = 1;
+        while (existing.Contains(unique)) unique = $"{safe}{i++}";
+
+        State.Mutate(() => State.Report!.AddEmbeddedImage(unique, mime, b64));
+    }
+}

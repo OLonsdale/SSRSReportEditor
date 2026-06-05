@@ -1,0 +1,134 @@
+@inject EditorState State
+@implements IDisposable
+
+<div class="outline-panel">
+    @if (State.Report is { } r)
+    {
+        <div class="section">
+            <div class="section-title">Body</div>
+            @RenderItems(r.Body)
+        </div>
+        @if (r.PageHeader != null)
+        {
+            <div class="section">
+                <div class="section-title">Page Header</div>
+                @RenderItems(r.PageHeader)
+            </div>
+        }
+        @if (r.PageFooter != null)
+        {
+            <div class="section">
+                <div class="section-title">Page Footer</div>
+                @RenderItems(r.PageFooter)
+            </div>
+        }
+    }
+</div>
+
+@code {
+    protected override void OnInitialized() => State.Changed += Tick;
+    public void Dispose() => State.Changed -= Tick;
+    private void Tick() => InvokeAsync(StateHasChanged);
+
+    private RenderFragment RenderItems(System.Xml.Linq.XElement? container) => __b =>
+    {
+        if (container == null || State.Report == null) return;
+        int seq = 0;
+        var items = State.Report.ItemsIn(container).ToList();
+        for (int i = 0; i < items.Count; i++)
+        {
+            var it = items[i];
+            var idx = i;
+            __b.OpenElement(seq++, "div");
+            __b.AddAttribute(seq++, "class", $"row{(State.IsSelected(it) ? " selected" : "")}");
+            __b.OpenElement(seq++, "div");
+            __b.AddAttribute(seq++, "class", "label");
+            __b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                e => State.Select(it, additive: e.ShiftKey || e.CtrlKey)));
+            __b.OpenElement(seq++, "span"); __b.AddAttribute(seq++, "class", "kind"); __b.AddContent(seq++, it.Kind); __b.CloseElement();
+            __b.AddContent(seq++, " ");
+            __b.AddContent(seq++, it.Name);
+            __b.CloseElement();
+
+            __b.OpenElement(seq++, "div");
+            __b.AddAttribute(seq++, "class", "actions");
+
+            // Visibility toggle.
+            var hiddenStatic = string.Equals(it.VisibilityHidden, "true", StringComparison.OrdinalIgnoreCase);
+            __b.OpenElement(seq++, "button");
+            __b.AddAttribute(seq++, "title", hiddenStatic ? "Show" : "Hide");
+            __b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => ToggleVisible(it)));
+            __b.AddContent(seq++, hiddenStatic ? "◌" : "●");
+            __b.CloseElement();
+
+            // Lock toggle (custom attribute that survives round-trip).
+            var locked = it.Xml.Attribute("data-locked")?.Value == "true";
+            __b.OpenElement(seq++, "button");
+            __b.AddAttribute(seq++, "title", locked ? "Unlock" : "Lock");
+            __b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => ToggleLock(it)));
+            __b.AddContent(seq++, locked ? "🔒" : "🔓");
+            __b.CloseElement();
+
+            // Move up/down.
+            __b.OpenElement(seq++, "button");
+            __b.AddAttribute(seq++, "title", "Up");
+            __b.AddAttribute(seq++, "disabled", idx == 0);
+            __b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => Move(it, -1)));
+            __b.AddContent(seq++, "↑"); __b.CloseElement();
+
+            __b.OpenElement(seq++, "button");
+            __b.AddAttribute(seq++, "title", "Down");
+            __b.AddAttribute(seq++, "disabled", idx == items.Count - 1);
+            __b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => Move(it, +1)));
+            __b.AddContent(seq++, "↓"); __b.CloseElement();
+
+            __b.CloseElement(); // actions
+            __b.CloseElement(); // row
+
+            // Recurse into Rectangles.
+            if (it is RectangleItem rc && rc.Xml.Element(Ns.R + "ReportItems") is { } childRi)
+            {
+                __b.OpenElement(seq++, "div");
+                __b.AddAttribute(seq++, "class", "children");
+                __b.AddContent(seq++, RenderItems(rc.Xml));
+                __b.CloseElement();
+            }
+        }
+    };
+
+    private void ToggleVisible(ReportItem it)
+    {
+        State.Mutate(() =>
+        {
+            it.VisibilityHidden = string.Equals(it.VisibilityHidden, "true", StringComparison.OrdinalIgnoreCase)
+                ? null : "true";
+        });
+    }
+
+    private void ToggleLock(ReportItem it)
+    {
+        var locked = it.Xml.Attribute("data-locked")?.Value == "true";
+        State.Mutate(() =>
+        {
+            if (locked) it.Xml.Attribute("data-locked")?.Remove();
+            else it.Xml.SetAttributeValue("data-locked", "true");
+        });
+    }
+
+    private void Move(ReportItem it, int dir)
+    {
+        State.Mutate(() =>
+        {
+            var sibling = dir < 0 ? it.Xml.ElementsBeforeSelf().LastOrDefault()
+                                  : it.Xml.ElementsAfterSelf().FirstOrDefault();
+            if (sibling == null) return;
+            it.Xml.Remove();
+            if (dir < 0) sibling.AddBeforeSelf(it.Xml);
+            else sibling.AddAfterSelf(it.Xml);
+        });
+    }
+}

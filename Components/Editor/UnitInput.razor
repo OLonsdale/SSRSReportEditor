@@ -1,0 +1,36 @@
+@code {
+    [Parameter] public SsrsUnit Value { get; set; }
+    [Parameter] public EventCallback<SsrsUnit> OnChange { get; set; }
+}
+
+<div class="unit-input">
+    <input type="text" value="@FormattedValue" @onchange="OnTextChanged"
+           title="Type a number, optionally with cm/mm/in/pt/pc/px" />
+    <select value="@Value.Unit" @onchange="OnUnitChanged">
+        <option>cm</option>
+        <option>mm</option>
+        <option>in</option>
+        <option>pt</option>
+        <option>px</option>
+    </select>
+</div>
+
+@code {
+    private string FormattedValue =>
+        Value.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+
+    private async Task OnTextChanged(ChangeEventArgs e)
+    {
+        if (SsrsUnit.TryParseSmart(e.Value?.ToString(), Value.Unit, out var parsed))
+        {
+            // If user typed a unit, honour it; otherwise keep the existing unit.
+            await OnChange.InvokeAsync(parsed);
+        }
+    }
+
+    private async Task OnUnitChanged(ChangeEventArgs e)
+    {
+        var newUnit = e.Value?.ToString() ?? "cm";
+        await OnChange.InvokeAsync(SsrsUnit.FromMm(Value.Mm, newUnit));
+    }
+}

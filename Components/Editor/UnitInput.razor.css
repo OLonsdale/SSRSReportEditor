@@ -1,0 +1,7 @@
+.unit-input {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+}
+.unit-input input { flex: 1; min-width: 0; }
+.unit-input select { width: 56px; }

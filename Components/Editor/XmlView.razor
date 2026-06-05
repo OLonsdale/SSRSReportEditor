@@ -1,0 +1,32 @@
+@inject EditorState State
+@implements IDisposable
+
+<div class="xml-view">
+    <div class="header">
+        Raw RDL XML
+        <button @onclick="Copy" title="Copy to clipboard">Copy</button>
+    </div>
+    @if (State.Report is { } r)
+    {
+        <pre>@r.SerializeToString()</pre>
+    }
+    else
+    {
+        <div class="muted">No report loaded.</div>
+    }
+</div>
+
+@code {
+    [Inject] IJSRuntime JS { get; set; } = default!;
+
+    protected override void OnInitialized() => State.Changed += OnChanged;
+    public void Dispose() => State.Changed -= OnChanged;
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task Copy()
+    {
+        if (State.Report == null) return;
+        var xml = State.Report.SerializeToString();
+        await JS.InvokeVoidAsync("navigator.clipboard.writeText", xml);
+    }
+}

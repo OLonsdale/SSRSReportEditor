@@ -1,0 +1,59 @@
+.outline-panel { padding: 8px; font-size: .8rem; }
+
+.section { margin-bottom: 10px; }
+.section-title {
+    color: #ccc; font-weight: 600;
+    text-transform: uppercase;
+    font-size: .68rem; letter-spacing: .5px;
+    padding: 4px 2px;
+}
+
+.row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 4px;
+    border-radius: 3px;
+}
+.row:hover { background: #2a2d2e; }
+.row.selected { background: #094771; color: #fff; }
+
+.label {
+    flex: 1;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #d4d4d4;
+    padding: 2px 0;
+}
+.row.selected .label { color: #fff; }
+.label .kind {
+    color: #888;
+    font-size: .68rem;
+    margin-right: 4px;
+}
+
+.actions {
+    display: flex;
+    gap: 1px;
+    visibility: hidden;
+}
+.row:hover .actions, .row.selected .actions { visibility: visible; }
+.actions button {
+    background: transparent;
+    color: #aaa;
+    border: none;
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: .72rem;
+    line-height: 1;
+}
+.actions button:hover { color: #fff; }
+.actions button:disabled { opacity: .3; }
+
+.children {
+    margin-left: 14px;
+    border-left: 1px solid #3c3c3c;
+    padding-left: 4px;
+}

@@ -1,0 +1,311 @@
+@inject EditorState State
+@inject SqlService Sql
+
+<div class="data-panel">
+    <fieldset>
+        <legend>SQL Server connection</legend>
+        <textarea rows="3" placeholder="Server=...;Database=...;User Id=...;Password=...;Encrypt=True;TrustServerCertificate=True"
+                  @oninput="@(e => Sql.ConnectionString = e.Value?.ToString())">@Sql.ConnectionString</textarea>
+        <small class="muted">Stored only in memory for this session.</small>
+    </fieldset>
+
+    @if (State.Report is { } r)
+    {
+        <fieldset>
+            <legend>Data sources</legend>
+            @foreach (var ds in r.DataSources)
+            {
+                <div class="ds-source">
+                    <div class="row"><label>Name</label>
+                        <input value="@ds.Name"
+                               @onchange="@(e => State.Mutate(() => ds.Name = e.Value?.ToString() ?? ds.Name))" />
+                    </div>
+                    @if (!string.IsNullOrEmpty(ds.DataSourceReference))
+                    {
+                        <div class="row"><label>Reference</label>
+                            <input value="@ds.DataSourceReference"
+                                   @onchange="@(e => State.Mutate(() => ds.DataSourceReference = e.Value?.ToString()))" />
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="row stack"><label>Connect string</label>
+                            <textarea rows="2"
+                                @onchange="@(e => State.Mutate(() => ds.ConnectString = e.Value?.ToString()))">@ds.ConnectString</textarea>
+                        </div>
+                    }
+                    <button class="del" @onclick="() => RemoveDataSource(ds.Name)">Remove</button>
+                </div>
+            }
+            <button class="add" @onclick="AddDataSource">+ Add data source</button>
+        </fieldset>
+
+        <fieldset>
+            <legend>Report parameters
+                <button class="add inline" @onclick="AddParameter">+ Add</button>
+            </legend>
+            @if (!r.Parameters.Any())
+            {
+                <div class="muted small">No parameters defined.</div>
+            }
+            @foreach (var p in r.Parameters)
+            {
+                <div class="row">
+                    <label title="@p.DataType">@p.Name</label>
+                    <input value="@GetParamValue(p.Name, p.DefaultValue)"
+                           @oninput="@(e => SetParamValue(p.Name, e.Value?.ToString()))" />
+                    <button class="del-tiny" title="Remove parameter"
+                            @onclick="() => RemoveParameter(p.Name)">×</button>
+                </div>
+            }
+        </fieldset>
+
+        <fieldset>
+            <legend>Datasets
+                <button class="add inline" @onclick="AddDataSet">+ Add</button>
+            </legend>
+            @foreach (var ds in r.DataSets)
+            {
+                <div class="ds @(_open == ds.Name ? "open" : "")">
+                    <div class="ds-head" @onclick="() => Toggle(ds.Name)">
+                        <span>@ds.Name</span>
+                        <span class="muted small">@ds.Fields.Count() fields</span>
+                    </div>
+                    @if (_open == ds.Name)
+                    {
+                        <div class="ds-body">
+                            <label class="small muted">Command text</label>
+                            <textarea rows="8" class="sql"
+                                      @oninput="@(e => State.Mutate(() => ds.CommandText = e.Value?.ToString() ?? ""))">@ds.CommandText</textarea>
+
+                            <div class="actions">
+                                <button @onclick="() => RunQuery(ds)" disabled="@_running">Run SQL</button>
+                                <button @onclick="() => RefreshFields(ds)" disabled="@_running">Refresh fields from result</button>
+                                <button @onclick="() => Sql.Clear(ds.Name)">Clear preview</button>
+                                <button @onclick='() => Toggle(ds.Name + "|csv")'
+                                        title="Paste CSV as sample data — useful when no SQL connection">
+                                    @(_open == ds.Name + "|csv" ? "Hide" : "Paste") CSV
+                                </button>
+                                <button @onclick='() => Toggle(ds.Name + "|json")'
+                                        title="Paste JSON array as sample data">
+                                    @(_open == ds.Name + "|json" ? "Hide" : "Paste") JSON
+                                </button>
+                            </div>
+
+                            @if (_open == ds.Name + "|csv")
+                            {
+                                <textarea rows="6" class="sql" placeholder="col1,col2&#10;val1,val2"
+                                          @oninput="@(e => _csvBuffer = e.Value?.ToString() ?? "")">@_csvBuffer</textarea>
+                                <div class="actions">
+                                    <button @onclick="() => ImportCsv(ds)">Import CSV → preview</button>
+                                </div>
+                            }
+                            @if (_open == ds.Name + "|json")
+                            {
+                                <textarea rows="6" class="sql" placeholder='[{"col1":"val1","col2":"val2"}]'
+                                          @oninput="@(e => _jsonBuffer = e.Value?.ToString() ?? "")">@_jsonBuffer</textarea>
+                                <div class="actions">
+                                    <button @onclick="() => ImportJson(ds)">Import JSON → preview</button>
+                                </div>
+                            }
+
+                            @if (_error != null && _errorDs == ds.Name)
+                            {
+                                <div class="error">@_error</div>
+                            }
+
+                            <label class="small muted">Fields</label>
+                            <table class="fields">
+                                <thead><tr><th>Name</th><th>DataField</th><th>Type</th></tr></thead>
+                                <tbody>
+                                @foreach (var f in ds.Fields)
+                                {
+                                    <tr>
+                                        <td>@f.Name</td>
+                                        <td>@f.DataField</td>
+                                        <td>@f.TypeName</td>
+                                    </tr>
+                                }
+                                </tbody>
+                            </table>
+
+                            @{ var dt = Sql.Preview(ds.Name); }
+                            @if (dt != null)
+                            {
+                                <label class="small muted">Preview (@dt.Rows.Count rows)</label>
+                                <div class="preview-wrap">
+                                    <table class="preview">
+                                        <thead>
+                                            <tr>
+                                                @foreach (System.Data.DataColumn c in dt.Columns)
+                                                {
+                                                    <th>@c.ColumnName</th>
+                                                }
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            @foreach (System.Data.DataRow row in dt.Rows.Cast<System.Data.DataRow>().Take(50))
+                                            {
+                                                <tr>
+                                                    @foreach (System.Data.DataColumn c in dt.Columns)
+                                                    {
+                                                        <td>@row[c]?.ToString()</td>
+                                                    }
+                                                </tr>
+                                            }
+                                        </tbody>
+                                    </table>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </fieldset>
+    }
+</div>
+
+@code {
+    private string? _open;
+    private bool _running;
+    private string? _error;
+    private string? _errorDs;
+    private string _csvBuffer = "";
+    private string _jsonBuffer = "";
+    private readonly Dictionary<string, string?> _paramValues = new();
+
+    private void Toggle(string name) => _open = _open == name ? null : name;
+
+    private string? GetParamValue(string name, string? dflt)
+        => _paramValues.TryGetValue(name, out var v) ? v : dflt;
+
+    private void SetParamValue(string name, string? v) => _paramValues[name] = v;
+
+    private async Task RunQuery(RdlDataSet ds)
+    {
+        if (State.Report == null) return;
+        _error = null; _errorDs = null;
+        _running = true;
+        try
+        {
+            await Sql.ExecuteAsync(ds, State.Report.Parameters, _paramValues);
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _errorDs = ds.Name;
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private async Task RefreshFields(RdlDataSet ds)
+    {
+        await RunQuery(ds);
+        var dt = Sql.Preview(ds.Name);
+        if (dt == null) return;
+        var fields = dt.Columns.Cast<System.Data.DataColumn>()
+            .Select(c => (c.ColumnName, (string?)c.DataType.FullName));
+        State.Mutate(() => ds.ReplaceFields(fields));
+    }
+
+    private void AddDataSource()
+    {
+        if (State.Report == null) return;
+        var existing = State.Report.DataSources.Select(d => d.Name).ToHashSet();
+        var name = "DataSource1";
+        var i = 1;
+        while (existing.Contains(name)) name = $"DataSource{++i}";
+        State.Mutate(() => State.Report!.AddDataSource(name));
+    }
+
+    private void RemoveDataSource(string name)
+    {
+        if (State.Report == null) return;
+        State.Mutate(() =>
+        {
+            var node = State.Report.DataSources.FirstOrDefault(d => d.Name == name);
+            node?.Xml.Remove();
+        });
+    }
+
+    private void AddDataSet()
+    {
+        if (State.Report == null) return;
+        var existing = State.Report.DataSets.Select(d => d.Name).ToHashSet();
+        var name = "DataSet1";
+        var i = 1;
+        while (existing.Contains(name)) name = $"DataSet{++i}";
+        var defaultDs = State.Report.DataSources.FirstOrDefault()?.Name;
+        State.Mutate(() => State.Report!.AddDataSet(name, defaultDs));
+    }
+
+    private void AddParameter()
+    {
+        if (State.Report == null) return;
+        var existing = State.Report.Parameters.Select(p => p.Name).ToHashSet();
+        var name = "Param1";
+        var i = 1;
+        while (existing.Contains(name)) name = $"Param{++i}";
+        State.Mutate(() => State.Report!.AddParameter(name));
+    }
+
+    private void RemoveParameter(string name)
+    {
+        if (State.Report == null) return;
+        State.Mutate(() =>
+        {
+            var p = State.Report.Parameters.FirstOrDefault(x => x.Name == name);
+            p?.Xml.Remove();
+        });
+    }
+
+    private void ImportCsv(RdlDataSet ds)
+    {
+        if (string.IsNullOrWhiteSpace(_csvBuffer)) return;
+        var dt = Sql.LoadFromCsv(ds.Name, _csvBuffer);
+        var fields = dt.Columns.Cast<System.Data.DataColumn>()
+            .Select(c => (c.ColumnName, (string?)c.DataType.FullName));
+        State.Mutate(() => ds.ReplaceFields(fields));
+    }
+
+    private void ImportJson(RdlDataSet ds)
+    {
+        if (string.IsNullOrWhiteSpace(_jsonBuffer)) return;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(_jsonBuffer);
+            var dt = new System.Data.DataTable();
+            if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+            {
+                // Collect column union from all rows.
+                var cols = new HashSet<string>();
+                foreach (var row in doc.RootElement.EnumerateArray())
+                    if (row.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        foreach (var prop in row.EnumerateObject()) cols.Add(prop.Name);
+                foreach (var c in cols) dt.Columns.Add(c);
+                foreach (var row in doc.RootElement.EnumerateArray())
+                {
+                    if (row.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                    var dr = dt.NewRow();
+                    foreach (var prop in row.EnumerateObject())
+                        if (dt.Columns.Contains(prop.Name))
+                            dr[prop.Name] = prop.Value.ToString();
+                    dt.Rows.Add(dr);
+                }
+            }
+            Sql.SetPreview(ds.Name, dt);
+            var fields = dt.Columns.Cast<System.Data.DataColumn>()
+                .Select(c => (c.ColumnName, (string?)"System.String"));
+            State.Mutate(() => ds.ReplaceFields(fields));
+            _error = null; _errorDs = null;
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _errorDs = ds.Name;
+        }
+    }
+}

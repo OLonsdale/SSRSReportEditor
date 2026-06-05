@@ -1,0 +1,412 @@
+@inject EditorState State
+
+<div class="inspector">
+    @if (State.SelectedItems.Count > 1)
+    {
+        <h3>Multi-selection <span class="muted">@State.SelectedItems.Count items</span></h3>
+        <fieldset>
+            <legend>Align</legend>
+            <div class="btn-row">
+                <button @onclick='() => Align("left")'>⇤ Left</button>
+                <button @onclick='() => Align("center-h")'>↔ Center-H</button>
+                <button @onclick='() => Align("right")'>⇥ Right</button>
+            </div>
+            <div class="btn-row">
+                <button @onclick='() => Align("top")'>⇧ Top</button>
+                <button @onclick='() => Align("center-v")'>↕ Center-V</button>
+                <button @onclick='() => Align("bottom")'>⇩ Bottom</button>
+            </div>
+            <div class="btn-row">
+                <button @onclick='() => Distribute("h")' disabled="@(State.SelectedItems.Count < 3)">⫾ Distribute H</button>
+                <button @onclick='() => Distribute("v")' disabled="@(State.SelectedItems.Count < 3)">⫽ Distribute V</button>
+            </div>
+            <div class="btn-row">
+                <button @onclick='() => SameSize("w")'>≡ Same width</button>
+                <button @onclick='() => SameSize("h")'>≡ Same height</button>
+            </div>
+        </fieldset>
+        <fieldset>
+            <legend>Bulk actions</legend>
+            <div class="btn-row">
+                <button @onclick="Duplicate">Duplicate (Ctrl+D)</button>
+                <button class="del" @onclick="DeleteSelected">Delete (Del)</button>
+            </div>
+        </fieldset>
+    }
+    else if (State.Selected is { } it)
+    {
+        <h3>@it.Kind <span class="muted">@it.Name</span></h3>
+        <div class="btn-row layer-row">
+            <button @onclick="() => Layer(+1000)" title="Bring to front">⤒</button>
+            <button @onclick="() => Layer(+1)" title="Forward">↑</button>
+            <button @onclick="() => Layer(-1)" title="Backward">↓</button>
+            <button @onclick="() => Layer(-1000)" title="Send to back">⤓</button>
+            <button @onclick="Duplicate" title="Duplicate (Ctrl+D)">⎘</button>
+            <button class="del" @onclick="DeleteSelected" title="Delete (Del)">🗑</button>
+        </div>
+
+        <fieldset>
+            <legend>Geometry</legend>
+            <div class="row"><label>Name</label>
+                <input value="@it.Name" @oninput="@(e => Mutate(() => it.Name = (string?)e.Value ?? ""))" />
+            </div>
+            <div class="row"><label>Left</label>
+                <UnitInput Value="@it.Left" OnChange="v => Mutate(() => it.Left = v)" />
+            </div>
+            <div class="row"><label>Top</label>
+                <UnitInput Value="@it.Top" OnChange="v => Mutate(() => it.Top = v)" />
+            </div>
+            <div class="row"><label>Width</label>
+                <UnitInput Value="@it.Width" OnChange="v => Mutate(() => it.Width = v)" />
+            </div>
+            <div class="row"><label>Height</label>
+                <UnitInput Value="@it.Height" OnChange="v => Mutate(() => it.Height = v)" />
+            </div>
+            <div class="row"><label>Z-Index</label>
+                <input type="number" value="@it.ZIndex"
+                       @onchange="@(e => Mutate(() => it.ZIndex = int.TryParse(e.Value?.ToString(), out var z) ? z : 0))" />
+            </div>
+        </fieldset>
+
+        @if (it is Textbox tb)
+        {
+            <fieldset>
+                <legend>Text</legend>
+                <textarea rows="6" class="expr"
+                          @oninput="@(e => Mutate(() => tb.PrimaryText = (string?)e.Value ?? ""))">@tb.PrimaryText</textarea>
+                <small class="muted">Expressions start with =. They are saved verbatim — not evaluated.</small>
+                <div class="row"><label>Can grow</label>
+                    <input type="checkbox" checked="@tb.CanGrow"
+                           @onchange="@(e => Mutate(() => tb.CanGrow = (bool)(e.Value ?? false)))" />
+                </div>
+                <div class="row"><label>Can shrink</label>
+                    <input type="checkbox" checked="@tb.CanShrink"
+                           @onchange="@(e => Mutate(() => tb.CanShrink = (bool)(e.Value ?? false)))" />
+                </div>
+            </fieldset>
+        }
+
+        @if (it is ImageItem img)
+        {
+            <fieldset>
+                <legend>Image</legend>
+                <div class="row"><label>Source</label>
+                    <select value="@img.Source"
+                            @onchange="@(e => Mutate(() => img.Source = e.Value?.ToString()))">
+                        <option>Embedded</option>
+                        <option>External</option>
+                        <option>Database</option>
+                    </select>
+                </div>
+                <div class="row"><label>Value</label>
+                    <input value="@img.Value"
+                           @oninput="@(e => Mutate(() => img.Value = e.Value?.ToString()))" />
+                </div>
+                <div class="row"><label>Sizing</label>
+                    <select value="@img.Sizing"
+                            @onchange="@(e => Mutate(() => img.Sizing = e.Value?.ToString()))">
+                        <option>AutoSize</option>
+                        <option>Fit</option>
+                        <option>FitProportional</option>
+                        <option>Clip</option>
+                    </select>
+                </div>
+            </fieldset>
+        }
+
+        <fieldset>
+            <legend>Style</legend>
+            <div class="row"><label>Font family</label>
+                <input value="@it.Style.FontFamily"
+                       @oninput="@(e => Mutate(() => it.Style.FontFamily = e.Value?.ToString()))" />
+            </div>
+            <div class="row"><label>Font size</label>
+                <input value="@it.Style.FontSize" placeholder="9pt"
+                       @oninput="@(e => Mutate(() => it.Style.FontSize = e.Value?.ToString()))" />
+            </div>
+            <div class="row"><label>Weight</label>
+                <select value="@it.Style.FontWeight"
+                        @onchange="@(e => Mutate(() => it.Style.FontWeight = e.Value?.ToString()))">
+                    <option value=""></option>
+                    <option>Normal</option><option>Bold</option><option>Lighter</option>
+                </select>
+            </div>
+            <div class="row"><label>Color</label>
+                <input value="@it.Style.Color" placeholder="#000"
+                       @oninput="@(e => Mutate(() => it.Style.Color = e.Value?.ToString()))" />
+            </div>
+            <div class="row"><label>Background</label>
+                <input value="@it.Style.BackgroundColor" placeholder="#fff"
+                       @oninput="@(e => Mutate(() => it.Style.BackgroundColor = e.Value?.ToString()))" />
+            </div>
+            <div class="row"><label>Text align</label>
+                <select value="@it.Style.TextAlign"
+                        @onchange="@(e => Mutate(() => it.Style.TextAlign = e.Value?.ToString()))">
+                    <option value=""></option>
+                    <option>Left</option><option>Center</option><option>Right</option><option>Justify</option>
+                </select>
+            </div>
+            <div class="row"><label>Border style</label>
+                <select value="@it.Style.Border.Style"
+                        @onchange="@(e => Mutate(() => it.Style.Border.Style = e.Value?.ToString()))">
+                    <option value=""></option>
+                    <option>None</option><option>Solid</option><option>Dashed</option><option>Dotted</option><option>Double</option>
+                </select>
+            </div>
+            <div class="row"><label>Border color</label>
+                <input value="@it.Style.Border.Color" placeholder="#000"
+                       @oninput="@(e => Mutate(() => it.Style.Border.Color = e.Value?.ToString()))" />
+            </div>
+            <div class="row"><label>Border width</label>
+                <input value="@it.Style.Border.Width" placeholder="1pt"
+                       @oninput="@(e => Mutate(() => it.Style.Border.Width = e.Value?.ToString()))" />
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Visibility</legend>
+            <div class="row stack"><label>Hidden</label>
+                <textarea rows="2" class="expr"
+                          @oninput="@(e => Mutate(() => it.VisibilityHidden = e.Value?.ToString()))">@it.VisibilityHidden</textarea>
+            </div>
+            <small class="muted">Static <code>true</code>/<code>false</code> or expression.</small>
+            <div class="row"><label>Tooltip</label>
+                <input value="@it.ToolTip"
+                       @oninput="@(e => Mutate(() => it.ToolTip = e.Value?.ToString()))" />
+            </div>
+        </fieldset>
+
+        @if (it is TablixItem tx)
+        {
+            <fieldset>
+                <legend>Tablix</legend>
+                <div class="row"><label>Dataset</label>
+                    <input value="@tx.DataSetName"
+                           @oninput="@(e => Mutate(() => tx.DataSetName = e.Value?.ToString()))" />
+                </div>
+                <div class="muted small">Columns: @tx.Columns.Count · Rows: @tx.Rows.Count</div>
+                <div class="btn-row">
+                    <button @onclick="() => Mutate(() => tx.AddColumn(SsrsUnit.FromMm(30)))">+ Column</button>
+                    <button @onclick="() => Mutate(() => tx.RemoveColumn(tx.Columns.Count - 1))"
+                            disabled="@(tx.Columns.Count <= 1)">− Column</button>
+                </div>
+                <div class="btn-row">
+                    <button @onclick="() => Mutate(() => tx.AddRow(SsrsUnit.FromMm(8)))">+ Row</button>
+                    <button @onclick="() => Mutate(() => tx.RemoveRow(tx.Rows.Count - 1))"
+                            disabled="@(tx.Rows.Count <= 1)">− Row</button>
+                </div>
+            </fieldset>
+
+            <fieldset>
+                <legend>Row groups (@tx.RowMembers.Count(m => m.GroupXml != null))</legend>
+                @foreach (var (m, i) in tx.RowMembers.Select((x, idx) => (x, idx)))
+                {
+                    <div class="grp">
+                        <div class="row"><label>Row #@i</label>
+                            <input value="@m.GroupName" placeholder="(no group)"
+                                   @onchange="@(e => Mutate(() => m.GroupName = e.Value?.ToString()))" />
+                        </div>
+                        <div class="row stack"><label>Expression</label>
+                            <textarea rows="1" class="expr" placeholder="=Fields!X.Value"
+                                      @onchange="@(e => Mutate(() => m.GroupExpression = e.Value?.ToString()))">@m.GroupExpression</textarea>
+                        </div>
+                        @if (m.GroupXml != null)
+                        {
+                            <button class="del" @onclick="() => Mutate(() => m.RemoveGroup())">Remove group</button>
+                        }
+                    </div>
+                }
+            </fieldset>
+            <fieldset>
+                <legend>Column groups (@tx.ColumnMembers.Count(m => m.GroupXml != null))</legend>
+                @foreach (var (m, i) in tx.ColumnMembers.Select((x, idx) => (x, idx)))
+                {
+                    <div class="grp">
+                        <div class="row"><label>Col #@i</label>
+                            <input value="@m.GroupName" placeholder="(no group)"
+                                   @onchange="@(e => Mutate(() => m.GroupName = e.Value?.ToString()))" />
+                        </div>
+                        <div class="row stack"><label>Expression</label>
+                            <textarea rows="1" class="expr" placeholder="=Fields!X.Value"
+                                      @onchange="@(e => Mutate(() => m.GroupExpression = e.Value?.ToString()))">@m.GroupExpression</textarea>
+                        </div>
+                        @if (m.GroupXml != null)
+                        {
+                            <button class="del" @onclick="() => Mutate(() => m.RemoveGroup())">Remove group</button>
+                        }
+                    </div>
+                }
+            </fieldset>
+        }
+
+        @if (it is Subreport sr)
+        {
+            <fieldset>
+                <legend>Subreport</legend>
+                <div class="row"><label>Report path</label>
+                    <input value="@sr.ReportName"
+                           @oninput="@(e => Mutate(() => sr.ReportName = e.Value?.ToString()))" />
+                </div>
+                <div class="row"><label>Merge txns</label>
+                    <input type="checkbox" checked="@sr.MergeTransactions"
+                           @onchange="@(e => Mutate(() => sr.MergeTransactions = (bool)(e.Value ?? false)))" />
+                </div>
+                <div class="muted small">Parameters</div>
+                @foreach (var (name, value) in sr.Parameters)
+                {
+                    <div class="row">
+                        <input value="@name" placeholder="name"
+                               @onchange="@(e => Rename(sr, name, e.Value?.ToString() ?? name))" />
+                        <input value="@value" placeholder="=expr"
+                               @onchange="@(e => Mutate(() => sr.SetParameter(name, e.Value?.ToString())))" />
+                        <button class="del-tiny" @onclick="() => Mutate(() => sr.RemoveParameter(name))">×</button>
+                    </div>
+                }
+                <button class="add" @onclick="() => AddSubreportParam(sr)">+ Param</button>
+            </fieldset>
+        }
+    }
+    else if (State.Report is { } r)
+    {
+        <h3>Report</h3>
+        <div class="row stack"><label>Description</label>
+            <textarea rows="2"
+                      @oninput="@(e => Mutate(() => r.Description = e.Value?.ToString()))">@r.Description</textarea>
+        </div>
+        <div class="row"><label>Body width</label>
+            <UnitInput Value="@r.BodyWidth" OnChange="v => Mutate(() => r.BodyWidth = v)" />
+        </div>
+        <div class="row"><label>Body height</label>
+            <UnitInput Value="@r.BodyHeight" OnChange="v => Mutate(() => r.BodyHeight = v)" />
+        </div>
+        <div class="row"><label>Page width</label>
+            <UnitInput Value="@r.PageWidth" OnChange="v => Mutate(() => r.PageWidth = v)" />
+        </div>
+        <div class="row"><label>Page height</label>
+            <UnitInput Value="@r.PageHeight" OnChange="v => Mutate(() => r.PageHeight = v)" />
+        </div>
+    }
+    else
+    {
+        <div class="empty muted">Nothing selected</div>
+    }
+</div>
+
+@code {
+    private void Mutate(Action a) => State.Mutate(a);
+
+    private void Rename(Subreport sr, string oldName, string newName)
+    {
+        if (oldName == newName) return;
+        var val = sr.Parameters.FirstOrDefault(p => p.Name == oldName).Value;
+        Mutate(() => { sr.RemoveParameter(oldName); sr.SetParameter(newName, val); });
+    }
+
+    private void AddSubreportParam(Subreport sr)
+    {
+        var n = "Param" + (sr.Parameters.Count() + 1);
+        Mutate(() => sr.SetParameter(n, ""));
+    }
+
+    private void DeleteSelected()
+    {
+        var items = State.SelectedItems.ToList();
+        if (items.Count == 0) return;
+        State.Mutate(() => { foreach (var i in items) i.Xml.Remove(); });
+        State.Select(null);
+    }
+
+    private void Duplicate()
+    {
+        if (State.Report == null) return;
+        var items = State.SelectedItems.ToList();
+        if (items.Count == 0) return;
+        var created = new List<ReportItem>();
+        State.Mutate(() =>
+        {
+            foreach (var it in items)
+            {
+                var name = State.UniqueName(it.Kind);
+                var clone = ItemFactory.Duplicate(it.Xml, name,
+                    SsrsUnit.FromMm(5), SsrsUnit.FromMm(5));
+                created.Add(State.Report.AddBodyItem(clone));
+            }
+        });
+        State.SelectMany(created);
+    }
+
+    private void Layer(int delta)
+    {
+        var it = State.Selected;
+        if (it is null) return;
+        State.Mutate(() => it.ZIndex += delta);
+    }
+
+    private void Align(string mode)
+    {
+        var items = State.SelectedItems.ToList();
+        if (items.Count < 2) return;
+        State.Mutate(() =>
+        {
+            switch (mode)
+            {
+                case "left":     { var x = items.Min(i => i.Left.Mm);
+                                   foreach (var i in items) i.Left = i.Left.WithMm(x); break; }
+                case "right":    { var x = items.Max(i => i.Left.Mm + i.Width.Mm);
+                                   foreach (var i in items) i.Left = i.Left.WithMm(x - i.Width.Mm); break; }
+                case "center-h": { var minL = items.Min(i => i.Left.Mm);
+                                   var maxR = items.Max(i => i.Left.Mm + i.Width.Mm);
+                                   var c = (minL + maxR) / 2;
+                                   foreach (var i in items) i.Left = i.Left.WithMm(c - i.Width.Mm / 2); break; }
+                case "top":      { var y = items.Min(i => i.Top.Mm);
+                                   foreach (var i in items) i.Top = i.Top.WithMm(y); break; }
+                case "bottom":   { var y = items.Max(i => i.Top.Mm + i.Height.Mm);
+                                   foreach (var i in items) i.Top = i.Top.WithMm(y - i.Height.Mm); break; }
+                case "center-v": { var minT = items.Min(i => i.Top.Mm);
+                                   var maxB = items.Max(i => i.Top.Mm + i.Height.Mm);
+                                   var c = (minT + maxB) / 2;
+                                   foreach (var i in items) i.Top = i.Top.WithMm(c - i.Height.Mm / 2); break; }
+            }
+        });
+    }
+
+    private void Distribute(string axis)
+    {
+        var items = State.SelectedItems.ToList();
+        if (items.Count < 3) return;
+        State.Mutate(() =>
+        {
+            if (axis == "h")
+            {
+                var sorted = items.OrderBy(i => i.Left.Mm).ToList();
+                var span = sorted[^1].Left.Mm - sorted[0].Left.Mm;
+                var step = span / (sorted.Count - 1);
+                for (int i = 1; i < sorted.Count - 1; i++)
+                    sorted[i].Left = sorted[i].Left.WithMm(sorted[0].Left.Mm + step * i);
+            }
+            else
+            {
+                var sorted = items.OrderBy(i => i.Top.Mm).ToList();
+                var span = sorted[^1].Top.Mm - sorted[0].Top.Mm;
+                var step = span / (sorted.Count - 1);
+                for (int i = 1; i < sorted.Count - 1; i++)
+                    sorted[i].Top = sorted[i].Top.WithMm(sorted[0].Top.Mm + step * i);
+            }
+        });
+    }
+
+    private void SameSize(string axis)
+    {
+        var items = State.SelectedItems.ToList();
+        if (items.Count < 2) return;
+        State.Mutate(() =>
+        {
+            var primary = State.Selected!;
+            foreach (var i in items)
+            {
+                if (axis == "w") i.Width = i.Width.WithMm(primary.Width.Mm);
+                else             i.Height = i.Height.WithMm(primary.Height.Mm);
+            }
+        });
+    }
+}

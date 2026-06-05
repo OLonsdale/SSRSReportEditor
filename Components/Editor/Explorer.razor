@@ -1,0 +1,45 @@
+@inject EditorState State
+
+<div class="explorer">
+    @if (State.Report is { } r)
+    {
+        <details open>
+            <summary>Data Sources (@r.DataSources.Count())</summary>
+            @foreach (var ds in r.DataSources)
+            {
+                <div class="leaf">@ds.Name</div>
+            }
+        </details>
+
+        <details open>
+            <summary>Datasets (@r.DataSets.Count())</summary>
+            @foreach (var ds in r.DataSets)
+            {
+                <div class="leaf">
+                    @ds.Name
+                    <span class="muted">(@ds.Fields.Count() fields)</span>
+                </div>
+            }
+        </details>
+
+        <details open>
+            <summary>Parameters (@r.Parameters.Count())</summary>
+            @foreach (var p in r.Parameters)
+            {
+                <div class="leaf">@p.Name <span class="muted">@p.DataType</span></div>
+            }
+        </details>
+
+        <details open>
+            <summary>Body Items (@r.BodyItems.Count())</summary>
+            @foreach (var item in r.BodyItems)
+            {
+                <div class="leaf clickable @(ReferenceEquals(State.Selected, item) ? "selected" : "")"
+                     @onclick="() => State.Select(item)">
+                    <span class="kind">@item.Kind</span>
+                    @item.Name
+                </div>
+            }
+        </details>
+    }
+</div>

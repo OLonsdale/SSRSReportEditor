@@ -1,0 +1,35 @@
+.xml-view {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    font-size: .8rem;
+}
+.header {
+    padding: 8px 10px;
+    color: #ccc;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #3c3c3c;
+}
+.header button {
+    margin-left: auto;
+    background: #3c3c3c; color: #d4d4d4;
+    border: 1px solid #555; padding: 2px 8px;
+    border-radius: 3px; cursor: pointer;
+    font-size: .72rem;
+}
+.header button:hover { background: #4a4a4a; }
+
+pre {
+    flex: 1;
+    margin: 0;
+    padding: 8px 10px;
+    overflow: auto;
+    color: #ce9178;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: .7rem;
+    white-space: pre;
+}
+.muted { color: #888; padding: 10px; }

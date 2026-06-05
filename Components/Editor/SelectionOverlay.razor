@@ -1,0 +1,121 @@
+@inject EditorState State
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@if (Item is { } it)
+{
+    <div class="sel-overlay" style="@OverlayStyle()" @ref="_overlayEl">
+        <div class="handle move" data-kind="move"></div>
+        <div class="handle nw" data-kind="nw"></div>
+        <div class="handle n"  data-kind="n"></div>
+        <div class="handle ne" data-kind="ne"></div>
+        <div class="handle e"  data-kind="e"></div>
+        <div class="handle se" data-kind="se"></div>
+        <div class="handle s"  data-kind="s"></div>
+        <div class="handle sw" data-kind="sw"></div>
+        <div class="handle w"  data-kind="w"></div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public ReportItem? Item { get; set; }
+    [Parameter] public double Zoom { get; set; } = 1.0;
+    [Parameter] public bool Snap { get; set; }
+    [Parameter] public int SnapMm { get; set; } = 1;
+    [Parameter] public List<ReportItem> AllSelected { get; set; } = new();
+    [Parameter] public bool Guides { get; set; } = true;
+
+    private ElementReference _overlayEl;
+    private DotNetObjectReference<SelectionOverlay>? _self;
+    private IJSObjectReference? _module;
+
+    private string OverlayStyle()
+    {
+        if (Item == null) return "display:none;";
+        return $"left:{Item.Left.Px:0.##}px;top:{Item.Top.Px:0.##}px;" +
+               $"width:{Item.Width.Px:0.##}px;height:{Item.Height.Px:0.##}px;";
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Item == null) return;
+        _self ??= DotNetObjectReference.Create(this);
+        _module ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/drag.js");
+        await _module.InvokeVoidAsync("attach", _overlayEl, _self, Zoom);
+        await _module.InvokeVoidAsync("setZoom", _overlayEl, Zoom);
+    }
+
+    [JSInvokable]
+    public void CommitGeometry(string kind, double dxPx, double dyPx)
+    {
+        if (Item == null) return;
+        var snap = Snap ? SnapMm : 0.0;
+        var dxMm = PxToMm(dxPx);
+        var dyMm = PxToMm(dyPx);
+
+        State.Mutate(() =>
+        {
+            if (kind == "move")
+            {
+                // Apply same delta to every selected item.
+                foreach (var t in AllSelected)
+                {
+                    var l = t.Left.Mm + dxMm;
+                    var top = t.Top.Mm + dyMm;
+                    if (snap > 0)
+                    {
+                        l = Math.Round(l / snap) * snap;
+                        top = Math.Round(top / snap) * snap;
+                    }
+                    t.Left = t.Left.WithMm(l);
+                    t.Top = t.Top.WithMm(top);
+                }
+            }
+            else
+            {
+                // Resize only the primary item.
+                ApplyResize(Item, kind, dxMm, dyMm, snap);
+            }
+        });
+    }
+
+    private static void ApplyResize(ReportItem it, string kind, double dxMm, double dyMm, double snap)
+    {
+        var leftMm = it.Left.Mm;
+        var topMm  = it.Top.Mm;
+        var wMm    = it.Width.Mm;
+        var hMm    = it.Height.Mm;
+        switch (kind)
+        {
+            case "e":  wMm += dxMm; break;
+            case "s":  hMm += dyMm; break;
+            case "se": wMm += dxMm; hMm += dyMm; break;
+            case "w":  leftMm += dxMm; wMm -= dxMm; break;
+            case "n":  topMm  += dyMm; hMm -= dyMm; break;
+            case "nw": leftMm += dxMm; wMm -= dxMm; topMm += dyMm; hMm -= dyMm; break;
+            case "ne": topMm  += dyMm; hMm -= dyMm; wMm += dxMm; break;
+            case "sw": leftMm += dxMm; wMm -= dxMm; hMm += dyMm; break;
+        }
+        wMm = Math.Max(1, wMm);
+        hMm = Math.Max(1, hMm);
+        if (snap > 0)
+        {
+            leftMm = Math.Round(leftMm / snap) * snap;
+            topMm  = Math.Round(topMm  / snap) * snap;
+            wMm    = Math.Round(wMm    / snap) * snap;
+            hMm    = Math.Round(hMm    / snap) * snap;
+        }
+        it.Left   = it.Left.WithMm(leftMm);
+        it.Top    = it.Top.WithMm(topMm);
+        it.Width  = it.Width.WithMm(wMm);
+        it.Height = it.Height.WithMm(hMm);
+    }
+
+    private static double PxToMm(double px) => px / 96.0 * 25.4;
+
+    public async ValueTask DisposeAsync()
+    {
+        try { if (_module != null) await _module.DisposeAsync(); } catch { }
+        _self?.Dispose();
+    }
+}

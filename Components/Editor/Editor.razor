@@ -1,0 +1,388 @@
+@inject EditorState State
+@inject SqlService Sql
+@inject IJSRuntime JS
+@implements IDisposable
+
+<Toolbar OnNew="NewReport" OnOpen="OpenFile" OnSave="SaveFile" OnTogglePanel="TogglePanel"
+         OnFind="ShowFind" OnPrint="DoPrint" ActivePanel="@_panel" />
+
+<div class="workspace @(_panel == LeftPanel.Hidden ? "left-collapsed" : "")">
+    <div class="left-pane @(_panel == LeftPanel.Hidden ? "collapsed" : "")">
+        @switch (_panel)
+        {
+            case LeftPanel.Explorer:   <Explorer />; break;
+            case LeftPanel.Outline:    <OutlinePanel />; break;
+            case LeftPanel.Report:     <ReportPanel />; break;
+            case LeftPanel.Data:       <DataPanel />; break;
+            case LeftPanel.Images:     <EmbeddedImagesPanel />; break;
+            case LeftPanel.Validate:   <ValidationPanel />; break;
+            case LeftPanel.Xml:        <XmlView />; break;
+        }
+    </div>
+
+    <div class="center-pane">
+        @if (State.Report == null)
+        {
+            <div class="placeholder">
+                <div class="placeholder-card">
+                    <h2>SSRS RDL Editor</h2>
+                    <p>Open an <code>.rdl</code> file to start editing, or drop one anywhere.</p>
+                    <div class="welcome-actions">
+                        <button class="btn-primary" @onclick="OpenFile">Open .rdl…</button>
+                        <button class="btn-secondary" @onclick="NewReport">Start blank</button>
+                    </div>
+                    @if (_recentFiles.Count > 0)
+                    {
+                        <div class="recent">
+                            <div class="recent-title">Recent</div>
+                            @foreach (var rf in _recentFiles)
+                            {
+                                <div class="recent-row">
+                                    <button class="recent-name" @onclick="() => RestoreDraft(rf.Key)">
+                                        @rf.Name
+                                    </button>
+                                    <button class="recent-del" title="Forget"
+                                            @onclick="() => ForgetDraft(rf.Key)">×</button>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+        else
+        {
+            <Canvas @ref="_canvas" />
+        }
+    </div>
+
+    <div class="right-pane">
+        <Inspector />
+    </div>
+</div>
+
+@if (_showFind)
+{
+    <FindReplace Mode="_findMode" OnClose="HideFind" />
+}
+
+<InputFile id="rdl-picker" OnChange="OnFilePicked" accept=".rdl,application/xml"
+           style="display:none" />
+
+@code {
+    private LeftPanel _panel = LeftPanel.Explorer;
+    private DotNetObjectReference<Editor>? _self;
+    private Canvas? _canvas;
+    private bool _showFind;
+    private FindReplace.FindMode _findMode = FindReplace.FindMode.Find;
+
+    // Recent files (localStorage drafts).
+    private record RecentFile(string Key, string Name, long Bytes);
+    private List<RecentFile> _recentFiles = new();
+
+    private System.Threading.Timer? _autoSaveTimer;
+    private bool _autoSaveScheduled;
+    private const string DraftPrefix = "rdl-draft:";
+
+    public enum LeftPanel { Hidden, Explorer, Outline, Report, Data, Images, Validate, Xml }
+
+    protected override void OnInitialized()
+    {
+        State.Changed += OnStateChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _self = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("ReportEditor.installShortcuts", _self);
+            await JS.InvokeVoidAsync("ReportEditor.installDragDrop", _self);
+            await LoadRecentList();
+        }
+    }
+
+    private async Task LoadRecentList()
+    {
+        try
+        {
+            var keys = await JS.InvokeAsync<string[]>("ReportEditor.listDrafts", DraftPrefix);
+            _recentFiles = keys
+                .OrderByDescending(k => k)
+                .Take(10)
+                .Select(k => new RecentFile(k, k.Substring(DraftPrefix.Length), 0))
+                .ToList();
+            // Note: don't read each draft's content for byte size — that would
+            // round-trip megabytes over SignalR and feel like a hang.
+            StateHasChanged();
+        }
+        catch { }
+    }
+
+    private void OnStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+        // Schedule throttled auto-save.
+        if (State.Report != null && !_autoSaveScheduled)
+        {
+            _autoSaveScheduled = true;
+            _autoSaveTimer?.Dispose();
+            _autoSaveTimer = new System.Threading.Timer(_ =>
+            {
+                _autoSaveScheduled = false;
+                // Hop back onto the Blazor sync context before touching JS.
+                _ = InvokeAsync(async () =>
+                {
+                    try
+                    {
+                        if (State.Report == null) return;
+                        var key = DraftPrefix + (State.FileName ?? "Untitled.rdl");
+                        var xml = State.Report.SerializeToString();
+                        await JS.InvokeVoidAsync("ReportEditor.saveDraft", key, xml);
+                    }
+                    catch { }
+                });
+            }, null, 1500, System.Threading.Timeout.Infinite);
+        }
+    }
+
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        _autoSaveTimer?.Dispose();
+        _self?.Dispose();
+    }
+
+    private void TogglePanel(LeftPanel p) => _panel = _panel == p ? LeftPanel.Hidden : p;
+
+    [JSInvokable]
+    public Task LoadRdlText(string fileName, string xml)
+    {
+        State.Load(xml, fileName);
+        return Task.CompletedTask;
+    }
+
+    private void NewReport()
+    {
+        var empty = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition"
+                    xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner">
+              <AutoRefresh>0</AutoRefresh>
+              <DataSources/>
+              <DataSets/>
+              <ReportSections>
+                <ReportSection>
+                  <Body>
+                    <ReportItems/>
+                    <Height>10cm</Height>
+                    <Width>16cm</Width>
+                  </Body>
+                  <Page>
+                    <PageHeight>29.7cm</PageHeight>
+                    <PageWidth>21cm</PageWidth>
+                    <LeftMargin>2cm</LeftMargin>
+                    <RightMargin>2cm</RightMargin>
+                    <TopMargin>2cm</TopMargin>
+                    <BottomMargin>2cm</BottomMargin>
+                  </Page>
+                </ReportSection>
+              </ReportSections>
+            </Report>
+            """;
+        State.Load(empty, "Untitled.rdl");
+    }
+
+    private async Task OpenFile()
+        => await JS.InvokeVoidAsync("ReportEditor.openRdl", _self, nameof(LoadRdlText));
+
+    private async Task OnFilePicked(InputFileChangeEventArgs e)
+    {
+        var file = e.File;
+        if (file == null) return;
+        await using var stream = file.OpenReadStream(maxAllowedSize: 32 * 1024 * 1024);
+        using var ms = new MemoryStream();
+        await stream.CopyToAsync(ms);
+        ms.Position = 0;
+        using var sr = new StreamReader(ms);
+        var xml = await sr.ReadToEndAsync();
+        State.Load(xml, file.Name);
+    }
+
+    private async Task SaveFile()
+    {
+        if (State.Report == null) return;
+        var xml = State.Report.SerializeToString();
+        await JS.InvokeVoidAsync("ReportEditor.downloadText", State.FileName ?? "report.rdl", xml,
+            "application/xml");
+        State.MarkClean();
+    }
+
+    private async Task RestoreDraft(string key)
+    {
+        try
+        {
+            var xml = await JS.InvokeAsync<string>("ReportEditor.loadDraft", key);
+            if (!string.IsNullOrWhiteSpace(xml))
+            {
+                State.Load(xml, key.Substring(DraftPrefix.Length));
+            }
+        }
+        catch { }
+    }
+
+    private async Task ForgetDraft(string key)
+    {
+        await JS.InvokeVoidAsync("ReportEditor.removeDraft", key);
+        await LoadRecentList();
+    }
+
+    private async Task DoPrint()
+    {
+        await JS.InvokeVoidAsync("ReportEditor.printPage");
+    }
+
+    private void ShowFind() { _showFind = true; _findMode = FindReplace.FindMode.Find; StateHasChanged(); }
+    private void HideFind() { _showFind = false; StateHasChanged(); }
+
+    [JSInvokable]
+    public async Task OnShortcut(string action)
+    {
+        switch (action)
+        {
+            case "save": await SaveFile(); break;
+            case "undo": State.Undo(); break;
+            case "redo": State.Redo(); break;
+            case "delete": DeleteSelected(); break;
+            case "duplicate": DuplicateSelected(); break;
+            case "cut": CutSelected(); break;
+            case "copy": CopySelected(); break;
+            case "paste": await PasteFromClipboard(); break;
+            case "find":
+                _showFind = true; _findMode = FindReplace.FindMode.Find;
+                StateHasChanged();
+                break;
+            case "replace":
+                _showFind = true; _findMode = FindReplace.FindMode.Replace;
+                StateHasChanged();
+                break;
+            case "print": await DoPrint(); break;
+            case "escape":
+                State.CancelPlacing();
+                State.Select(null);
+                if (_showFind) HideFind();
+                break;
+            case "close-ctx":
+                State.Raise();
+                break;
+        }
+    }
+
+    [JSInvokable]
+    public void OnNudge(string dir, bool shift)
+    {
+        if (State.SelectedItems.Count == 0) return;
+        var step = shift ? 5.0 : 0.5;
+        State.Mutate(() =>
+        {
+            foreach (var it in State.SelectedItems)
+            {
+                if (it.Xml.Attribute("data-locked")?.Value == "true") continue;
+                switch (dir)
+                {
+                    case "left":  it.Left = it.Left.WithMm(it.Left.Mm - step); break;
+                    case "right": it.Left = it.Left.WithMm(it.Left.Mm + step); break;
+                    case "up":    it.Top  = it.Top.WithMm(it.Top.Mm  - step); break;
+                    case "down":  it.Top  = it.Top.WithMm(it.Top.Mm  + step); break;
+                }
+            }
+        });
+    }
+
+    private void CopySelected()
+    {
+        if (State.SelectedItems.Count == 0) return;
+        State.Clipboard.Clear();
+        foreach (var it in State.SelectedItems)
+            State.Clipboard.Add(new System.Xml.Linq.XElement(it.Xml));
+        var xml = string.Join("\n", State.SelectedItems.Select(i => i.Xml.ToString()));
+        _ = JS.InvokeVoidAsync("navigator.clipboard.writeText",
+            $"<RdlItems xmlns=\"http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition\">\n{xml}\n</RdlItems>");
+    }
+
+    private void CutSelected()
+    {
+        if (State.SelectedItems.Count == 0) return;
+        CopySelected();
+        DeleteSelected();
+    }
+
+    private async Task PasteFromClipboard()
+    {
+        if (State.Report == null) return;
+        var container = State.CurrentContainer;
+        if (container == null) return;
+
+        var sources = State.Clipboard.Count > 0
+            ? State.Clipboard.Select(x => new System.Xml.Linq.XElement(x)).ToList()
+            : new List<System.Xml.Linq.XElement>();
+        if (sources.Count == 0)
+        {
+            try
+            {
+                var text = await JS.InvokeAsync<string>("navigator.clipboard.readText");
+                if (!string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith("<"))
+                {
+                    var root = System.Xml.Linq.XElement.Parse(text);
+                    sources = root.Elements().ToList();
+                }
+            }
+            catch { }
+        }
+        if (sources.Count == 0) return;
+
+        var created = new List<ReportItem>();
+        State.Mutate(() =>
+        {
+            foreach (var src in sources)
+            {
+                var kind = src.Name.LocalName;
+                var name = State.UniqueName(kind);
+                var clone = ItemFactory.Duplicate(src, name,
+                    SsrsUnit.FromMm(5), SsrsUnit.FromMm(5));
+                created.Add(State.Report.AddItemTo(container, clone));
+            }
+        });
+        State.SelectMany(created);
+    }
+
+    private void DeleteSelected()
+    {
+        if (State.SelectedItems.Count == 0) return;
+        var items = State.SelectedItems
+            .Where(i => i.Xml.Attribute("data-locked")?.Value != "true")
+            .ToList();
+        if (items.Count == 0) return;
+        State.Mutate(() => { foreach (var it in items) it.Xml.Remove(); });
+        State.Select(null);
+    }
+
+    private void DuplicateSelected()
+    {
+        if (State.Report == null || State.CurrentContainer == null
+            || State.SelectedItems.Count == 0) return;
+        var items = State.SelectedItems.ToList();
+        var created = new List<ReportItem>();
+        State.Mutate(() =>
+        {
+            foreach (var it in items)
+            {
+                var newName = State.UniqueName(it.Kind);
+                var clone = ItemFactory.Duplicate(it.Xml, newName,
+                    SsrsUnit.FromMm(5), SsrsUnit.FromMm(5));
+                created.Add(State.Report.AddItemTo(State.CurrentContainer, clone));
+            }
+        });
+        State.SelectMany(created);
+    }
+}

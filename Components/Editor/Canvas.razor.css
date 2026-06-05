@@ -1,0 +1,4 @@
+/* Intentionally empty — see wwwroot/css/canvas.css.
+   Canvas styles must stay global because items are rendered via
+   RenderTreeBuilder in C#, and Blazor scoped CSS attributes are only
+   stamped onto elements emitted from Razor markup. */

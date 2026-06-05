@@ -1,0 +1,50 @@
+@inject EditorState State
+
+<div class="toolbar">
+    <div class="group">
+        <button title="New" @onclick="() => OnNew.InvokeAsync()">New</button>
+        <button title="Open .rdl" @onclick="() => OnOpen.InvokeAsync()">Open</button>
+        <button title="Save .rdl (Ctrl+S)" @onclick="() => OnSave.InvokeAsync()" disabled="@(State.Report == null)">Save</button>
+    </div>
+
+    <div class="group">
+        <button title="Undo (Ctrl+Z)" @onclick="() => State.Undo()" disabled="@(!State.CanUndo)">↶</button>
+        <button title="Redo (Ctrl+Y)" @onclick="() => State.Redo()" disabled="@(!State.CanRedo)">↷</button>
+    </div>
+
+    <div class="group">
+        <button title="Find (Ctrl+F)" @onclick="() => OnFind.InvokeAsync()" disabled="@(State.Report == null)">🔍 Find</button>
+        <button title="Print preview (Ctrl+P)" @onclick="() => OnPrint.InvokeAsync()" disabled="@(State.Report == null)">🖶 Print</button>
+    </div>
+
+    <div class="group panels">
+        <button class="@(ActivePanel == Editor.LeftPanel.Explorer ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Explorer)">Explorer</button>
+        <button class="@(ActivePanel == Editor.LeftPanel.Outline ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Outline)">Outline</button>
+        <button class="@(ActivePanel == Editor.LeftPanel.Report ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Report)">Report</button>
+        <button class="@(ActivePanel == Editor.LeftPanel.Data ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Data)">Data</button>
+        <button class="@(ActivePanel == Editor.LeftPanel.Images ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Images)">Images</button>
+        <button class="@(ActivePanel == Editor.LeftPanel.Validate ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Validate)">Validate</button>
+        <button class="@(ActivePanel == Editor.LeftPanel.Xml ? "active" : "")"
+                @onclick="() => OnTogglePanel.InvokeAsync(Editor.LeftPanel.Xml)">XML</button>
+    </div>
+
+    <div class="filename">
+        @(State.FileName ?? "(no file)") @(State.Dirty ? "•" : "")
+    </div>
+</div>
+
+@code {
+    [Parameter] public EventCallback OnNew { get; set; }
+    [Parameter] public EventCallback OnOpen { get; set; }
+    [Parameter] public EventCallback OnSave { get; set; }
+    [Parameter] public EventCallback OnFind { get; set; }
+    [Parameter] public EventCallback OnPrint { get; set; }
+    [Parameter] public EventCallback<Editor.LeftPanel> OnTogglePanel { get; set; }
+    [Parameter] public Editor.LeftPanel ActivePanel { get; set; }
+}

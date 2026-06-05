@@ -1,0 +1,1062 @@
+@inject EditorState State
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+@if (State.Report is { } r && r.Body is not null)
+{
+    <div class="canvas-toolbar">
+        <button @onclick="() => SetZoom(_zoom - 0.1)">−</button>
+        <span class="zoom-label">@($"{_zoom * 100:0}%")</span>
+        <button @onclick="() => SetZoom(_zoom + 0.1)">+</button>
+        <button @onclick="() => SetZoom(1.0)">100%</button>
+
+        <span class="sep"></span>
+
+        <div class="scope-tabs">
+            <button class="@(State.Scope == EditorState.EditScope.PageHeader ? "active" : "")"
+                    @onclick="() => SwitchScope(EditorState.EditScope.PageHeader)">
+                Header @(r.PageHeader == null ? "(+)" : "")
+            </button>
+            <button class="@(State.Scope == EditorState.EditScope.Body ? "active" : "")"
+                    @onclick="() => SwitchScope(EditorState.EditScope.Body)">Body</button>
+            <button class="@(State.Scope == EditorState.EditScope.PageFooter ? "active" : "")"
+                    @onclick="() => SwitchScope(EditorState.EditScope.PageFooter)">
+                Footer @(r.PageFooter == null ? "(+)" : "")
+            </button>
+        </div>
+
+        <span class="sep"></span>
+
+        <label><input type="checkbox" @bind="_snap" /> Snap @_snapMm mm</label>
+        <label><input type="checkbox" @bind="_grid" /> Grid</label>
+        <label><input type="checkbox" @bind="_guides" name="guides" /> Smart guides</label>
+        <label title="Render =expressions as placeholders, like the SSRS viewer"
+        ><input type="checkbox" @bind="_prettyExpr" /> Hide expressions</label>
+
+        <span class="sep"></span>
+
+        <span class="palette">
+            <span class="palette-label">Insert:</span>
+            @foreach (var p in _paletteItems)
+            {
+                <button class="palette-btn @(State.PlacingKind == p.Kind ? "active" : "")"
+                        title="@p.Label"
+                        @onclick="() => TogglePlacing(p.Kind)">@p.Glyph</button>
+            }
+            @if (State.PlacingKind != null)
+            {
+                <span class="placing-hint">click canvas to place… (esc to cancel)</span>
+            }
+        </span>
+
+        <span class="dims">
+            Page: @r.PageWidth × @r.PageHeight
+            @if (State.Scope == EditorState.EditScope.Body)
+            {
+                <text>&nbsp;Body: @r.BodyWidth × @r.BodyHeight</text>
+            }
+            else if (State.Scope == EditorState.EditScope.PageHeader)
+            {
+                <text>&nbsp;Header height: @r.PageHeaderHeight</text>
+            }
+            else if (State.Scope == EditorState.EditScope.PageFooter)
+            {
+                <text>&nbsp;Footer height: @r.PageFooterHeight</text>
+            }
+        </span>
+    </div>
+
+    <div class="canvas-scroll" @ref="_scrollEl">
+        <div class="canvas-wrap" style="@WrapStyle()">
+            <div class="canvas @(State.PlacingKind != null ? "placing" : "")"
+                 @ref="_canvasEl" style="@CanvasStyle(r)"
+                 @onclick="OnCanvasClick" @onclick:stopPropagation="true">
+                @if (_grid)
+                {
+                    <div class="grid"></div>
+                }
+
+                @foreach (var item in State.CurrentItems)
+                {
+                    @RenderItem(item)
+                }
+
+                @{
+                    var pageBreaks = ComputePageBreaks(r);
+                }
+                @foreach (var y in pageBreaks)
+                {
+                    <div class="page-break" style="@($"top:{y:0.##}px;")"></div>
+                }
+
+                @if (State.Selected is { } sel && !sel.IsInsideTablixCell)
+                {
+                    <SelectionOverlay Item="sel" Zoom="_zoom" Snap="_snap" SnapMm="_snapMm"
+                                      AllSelected="@State.SelectedItems.ToList()"
+                                      Guides="_guides" />
+                }
+                @{
+                    // Show Tablix gridline handles whenever the selected item
+                    // IS a Tablix or sits inside one. (Cells fill the Tablix,
+                    // so clicking outside a cell to grab the Tablix itself is
+                    // basically impossible without this.)
+                    var enclosingTx = FindEnclosingTablix(State.Selected);
+                }
+                @if (enclosingTx != null)
+                {
+                    @RenderTablixHandles(enclosingTx)
+                }
+                @if (State.Selected is { } selAny)
+                {
+                    @if (_editingId != null && selAny is Textbox etb && _editingId == ItemId(etb))
+                    {
+                        <div class="rt-toolbar" style="@RtToolbarStyle(etb)" @onclick:stopPropagation="true">
+                            <button title="Bold" @onclick="() => Rt('b')"><b>B</b></button>
+                            <button title="Italic" @onclick="() => Rt('i')"><i>I</i></button>
+                            <button title="Underline" @onclick="() => Rt('u')"><u>U</u></button>
+                            <input type="color" title="Colour"
+                                   @onchange="@(e => RtColor(e.Value?.ToString()))" />
+                            <span class="sep"></span>
+                            <button title="Align left"   @onclick='() => RtAlign("Left")'>⇤</button>
+                            <button title="Align center" @onclick='() => RtAlign("Center")'>↔</button>
+                            <button title="Align right"  @onclick='() => RtAlign("Right")'>⇥</button>
+                        </div>
+                    }
+                }
+
+                @if (_finderVisible)
+                {
+                    <div class="item-finder" @onclick:stopPropagation="true">
+                        <input type="text" placeholder="Find item by name…"
+                               value="@_finderText" @oninput="OnFinderInput"
+                               @onkeydown="OnFinderKey" @ref="_finderRef" />
+                        @if (_finderText.Length > 0)
+                        {
+                            <div class="results">
+                                @foreach (var match in FinderMatches().Take(20))
+                                {
+                                    <div class="result" @onclick="() => JumpTo(match)">
+                                        <span class="kind">@match.Kind</span> @match.Name
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    @if (_ctxMenu != null)
+    {
+        <div class="ctx-menu" style="@($"left:{_ctxMenu.X}px;top:{_ctxMenu.Y}px;")"
+             @onclick:stopPropagation="true">
+            <div class="ctx-item" @onclick="@(() => CtxAction("cut"))">Cut <kbd>Ctrl+X</kbd></div>
+            <div class="ctx-item" @onclick="@(() => CtxAction("copy"))">Copy <kbd>Ctrl+C</kbd></div>
+            <div class="ctx-item" @onclick="@(() => CtxAction("paste"))">Paste <kbd>Ctrl+V</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item" @onclick="@(() => CtxAction("duplicate"))">Duplicate <kbd>Ctrl+D</kbd></div>
+            <div class="ctx-item" @onclick="@(() => CtxAction("delete"))">Delete <kbd>Del</kbd></div>
+            <div class="ctx-sep"></div>
+            <div class="ctx-item" @onclick="@(() => CtxAction("front"))">Bring to front</div>
+            <div class="ctx-item" @onclick="@(() => CtxAction("back"))">Send to back</div>
+        </div>
+    }
+}
+
+@if (_editTextbox is { } et)
+{
+    <div class="text-modal-backdrop" @onclick="CancelTextEdit">
+        <div class="text-modal" @onclick:stopPropagation="true">
+            <div class="text-modal-head">
+                <span class="title">Edit textbox <code>@et.Name</code></span>
+                <button class="close" @onclick="CancelTextEdit" title="Cancel (Esc)">×</button>
+            </div>
+            <textarea class="text-modal-body" @ref="_modalRef"
+                      spellcheck="false"
+                      @bind="_editBuffer" @bind:event="oninput"
+                      @onkeydown="OnEditorKey"></textarea>
+            <div class="text-modal-hint">
+                Tip: a leading <code>=</code> makes it an SSRS expression — e.g.
+                <code>=Fields!X.Value</code>, <code>=Parameters!X.Value</code>,
+                <code>=Sum(Fields!X.Value)</code>.
+            </div>
+            <div class="text-modal-foot">
+                <button class="btn" @onclick="CancelTextEdit">Cancel</button>
+                <button class="btn primary" @onclick="CommitTextEdit">Save (Ctrl+Enter)</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private record PaletteItem(string Kind, string Glyph, string Label);
+    private static readonly PaletteItem[] _paletteItems = new[]
+    {
+        new PaletteItem("Textbox",   "T",  "Textbox"),
+        new PaletteItem("Image",     "🖼", "Image"),
+        new PaletteItem("Rectangle", "▭", "Rectangle"),
+        new PaletteItem("Line",      "/",  "Line"),
+        new PaletteItem("Tablix",    "⊞", "Tablix"),
+        new PaletteItem("Subreport", "⤴", "Subreport"),
+    };
+
+    private ElementReference _canvasEl;
+    private ElementReference _scrollEl;
+    private double _zoom = 1.0;
+    private bool _grid = true;
+    private bool _snap = false;
+    private bool _guides = true;
+    private bool _prettyExpr = true;     // default: show placeholders, not raw =expressions
+    private int _snapMm = 1;
+
+    // Track when the last rubber-band finished so the synthetic click that
+    // follows pointerup doesn't immediately blow away the selection we just made.
+    private DateTime _lastRubberBand = DateTime.MinValue;
+
+    // Text-edit modal state.
+    private Textbox? _editTextbox;
+    private string _editBuffer = "";
+    private ElementReference _modalRef;
+
+    private string? _editingId;
+    private DotNetObjectReference<Canvas>? _self;
+    private IJSObjectReference? _dragModule;
+    private bool _modulesInstalled;
+
+    private record CtxMenu(double X, double Y);
+    private CtxMenu? _ctxMenu;
+
+    private void SetZoom(double z) => _zoom = Math.Max(0.25, Math.Min(4.0, z));
+
+    private void TogglePlacing(string kind)
+    {
+        if (State.PlacingKind == kind) State.CancelPlacing();
+        else State.StartPlacing(kind);
+    }
+
+    private void SwitchScope(EditorState.EditScope s)
+    {
+        // Lazy-create header/footer if user clicked their tab.
+        if (State.Report is { } r)
+        {
+            if (s == EditorState.EditScope.PageHeader && r.PageHeader == null)
+                State.Mutate(() => r.EnsurePageHeader());
+            else if (s == EditorState.EditScope.PageFooter && r.PageFooter == null)
+                State.Mutate(() => r.EnsurePageFooter());
+        }
+        State.SetScope(s);
+    }
+
+    private string WrapStyle()
+    {
+        var (w, h) = ContainerSizePx();
+        return $"width:{w * _zoom:0.##}px;height:{h * _zoom:0.##}px;";
+    }
+
+    private string CanvasStyle(Report r)
+    {
+        var (w, h) = ContainerSizePx();
+        var bg = "";
+        // Body background image becomes a watermark on the canvas.
+        if (State.Scope == EditorState.EditScope.Body && r.BodyBackgroundImage is { } bgInfo
+            && !string.IsNullOrEmpty(bgInfo.Value))
+        {
+            var ei = r.EmbeddedImages.FirstOrDefault(e => e.Name == bgInfo.Value);
+            if (ei != null && !string.IsNullOrEmpty(ei.ImageData))
+            {
+                var repeat = bgInfo.Repeat switch
+                {
+                    "Repeat"   => "repeat",
+                    "RepeatX"  => "repeat-x",
+                    "RepeatY"  => "repeat-y",
+                    _          => "no-repeat"
+                };
+                var position = bgInfo.Repeat == "NoRepeat" ? "center center" : "top left";
+                bg = $"background:url('{ei.DataUrl}') {position}/contain {repeat};";
+            }
+        }
+        return $"width:{w:0.##}px;height:{h:0.##}px;transform:scale({_zoom});transform-origin:0 0;{bg}";
+    }
+
+    private (double w, double h) ContainerSizePx()
+    {
+        var r = State.Report;
+        if (r == null) return (0, 0);
+        return State.Scope switch
+        {
+            EditorState.EditScope.Body       => (r.BodyWidth.Px, r.BodyHeight.Px),
+            EditorState.EditScope.PageHeader => (
+                (r.PageWidth.Mm - r.MarginLeft.Mm - r.MarginRight.Mm) / 25.4 * 96.0,
+                r.PageHeaderHeight.Px),
+            EditorState.EditScope.PageFooter => (
+                (r.PageWidth.Mm - r.MarginLeft.Mm - r.MarginRight.Mm) / 25.4 * 96.0,
+                r.PageFooterHeight.Px),
+            _ => (r.BodyWidth.Px, r.BodyHeight.Px)
+        };
+    }
+
+    private string ItemBoxStyle(ReportItem it)
+        => $"left:{it.Left.Px:0.##}px;top:{it.Top.Px:0.##}px;" +
+           $"width:{it.Width.Px:0.##}px;height:{it.Height.Px:0.##}px;";
+
+    private string ItemStyle(ReportItem it)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"left:{it.Left.Px:0.##}px;");
+        sb.Append($"top:{it.Top.Px:0.##}px;");
+        sb.Append($"width:{it.Width.Px:0.##}px;");
+        sb.Append($"height:{it.Height.Px:0.##}px;");
+        sb.Append($"z-index:{it.ZIndex};");
+
+        var s = it.Style;
+        if (!string.IsNullOrEmpty(s.BackgroundColor)) sb.Append($"background:{s.BackgroundColor};");
+        if (!string.IsNullOrEmpty(s.Color))           sb.Append($"color:{s.Color};");
+        if (!string.IsNullOrEmpty(s.FontFamily))      sb.Append($"font-family:{s.FontFamily};");
+        if (!string.IsNullOrEmpty(s.FontSize))        sb.Append($"font-size:{s.FontSize};");
+        if (!string.IsNullOrEmpty(s.FontWeight))      sb.Append($"font-weight:{s.FontWeight};");
+        if (!string.IsNullOrEmpty(s.FontStyle))       sb.Append($"font-style:{s.FontStyle};");
+        if (!string.IsNullOrEmpty(s.TextAlign))       sb.Append($"text-align:{s.TextAlign.ToLower()};");
+        if (!string.IsNullOrEmpty(s.PaddingLeft))     sb.Append($"padding-left:{s.PaddingLeft};");
+        if (!string.IsNullOrEmpty(s.PaddingRight))    sb.Append($"padding-right:{s.PaddingRight};");
+        if (!string.IsNullOrEmpty(s.PaddingTop))      sb.Append($"padding-top:{s.PaddingTop};");
+        if (!string.IsNullOrEmpty(s.PaddingBottom))   sb.Append($"padding-bottom:{s.PaddingBottom};");
+
+        var b = s.Border;
+        if (!string.IsNullOrEmpty(b.Style) && !string.Equals(b.Style, "None", StringComparison.OrdinalIgnoreCase))
+        {
+            var bc = string.IsNullOrEmpty(b.Color) ? "#888" : b.Color;
+            var bw = string.IsNullOrEmpty(b.Width) ? "1px" : b.Width;
+            sb.Append($"border:{bw} {b.Style.ToLower()} {bc};");
+        }
+        if (it is LineItem)
+        {
+            var lc = string.IsNullOrEmpty(b.Color) ? "#222" : b.Color;
+            var lw = string.IsNullOrEmpty(b.Width) ? "1px" : b.Width;
+            sb.Append($"border:none;border-top:{lw} {(string.IsNullOrEmpty(b.Style) ? "solid" : b.Style.ToLower())} {lc};");
+        }
+        return sb.ToString();
+    }
+
+    private static string ItemId(ReportItem it) => "item-" + (it.Name?.Replace(" ", "_") ?? "anon");
+
+    private RenderFragment RenderItem(ReportItem item) => __builder =>
+    {
+        var isSel = State.IsSelected(item);
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", $"item {item.Kind.ToLower()}{(isSel ? " selected" : "")}");
+        __builder.AddAttribute(2, "id", ItemId(item));
+        __builder.AddAttribute(3, "data-name", item.Name);
+        __builder.AddAttribute(4, "style", ItemStyle(item));
+        __builder.AddAttribute(5, "title", $"{item.Kind}: {item.Name}");
+        __builder.AddAttribute(6, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => OnItemClick(item, e)));
+        __builder.AddEventStopPropagationAttribute(7, "onclick", true);
+        __builder.AddAttribute(8, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this, e => OnItemDoubleClick(item)));
+        __builder.AddEventStopPropagationAttribute(9, "ondblclick", true);
+        __builder.AddAttribute(10, "oncontextmenu", EventCallback.Factory.Create<MouseEventArgs>(this, e => OnItemContextMenu(item, e)));
+        __builder.AddEventPreventDefaultAttribute(11, "oncontextmenu", true);
+        __builder.AddEventStopPropagationAttribute(12, "oncontextmenu", true);
+        RenderItemContent(__builder, item);
+        __builder.CloseElement();
+
+        if (isSel)
+        {
+            __builder.OpenElement(20, "div");
+            __builder.AddAttribute(21, "class", "sel-outline");
+            __builder.AddAttribute(22, "style", ItemBoxStyle(item));
+            __builder.CloseElement();
+        }
+    };
+
+    private void RenderItemContent(RenderTreeBuilder b, ReportItem it)
+    {
+        switch (it)
+        {
+            case Textbox tb:       RenderTextbox(b, tb); break;
+            case ImageItem img:    RenderImage(b, img); break;
+            case LineItem:         break;
+            case RectangleItem rc: RenderRectangle(b, rc); break;
+            case TablixItem tx:    RenderTablix(b, tx); break;
+            case Subreport sr:
+                b.OpenElement(0, "div");
+                b.AddAttribute(1, "class", "subreport-stub");
+                b.AddContent(2, $"⤴ Subreport → {(string.IsNullOrEmpty(sr.ReportName) ? "(unset)" : sr.ReportName)}");
+                b.CloseElement();
+                break;
+            default:
+                b.OpenElement(0, "div");
+                b.AddAttribute(1, "class", "generic-stub");
+                b.AddContent(2, $"{it.Kind} {it.Name}");
+                b.CloseElement();
+                break;
+        }
+    }
+
+    private void RenderRectangle(RenderTreeBuilder b, RectangleItem rc)
+    {
+        // Background frame.
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "rectangle-content");
+
+        // Children are absolute-positioned relative to the rectangle origin —
+        // their Top/Left in the model are already container-relative.
+        int seq = 10;
+        foreach (var child in rc.Children)
+        {
+            b.OpenElement(seq++, "div");
+            b.AddAttribute(seq++, "class", $"item {child.Kind.ToLower()}{(State.IsSelected(child) ? " selected" : "")}");
+            b.AddAttribute(seq++, "id", ItemId(child));
+            b.AddAttribute(seq++, "data-name", child.Name);
+            b.AddAttribute(seq++, "style", ItemStyle(child));
+            b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                e => OnItemClick(child, e)));
+            b.AddEventStopPropagationAttribute(seq++, "onclick", true);
+            RenderItemContent(b, child);
+            b.CloseElement();
+        }
+        b.CloseElement();
+    }
+
+    private const string InlineEditId = "rdl-inline-editor";
+
+    private void RenderTextbox(RenderTreeBuilder b, Textbox tb)
+    {
+        var isEditing = _editingId == ItemId(tb);
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "textbox-content");
+        if (isEditing)
+        {
+            b.AddAttribute(2, "contenteditable", "true");
+            b.AddAttribute(3, "spellcheck", "false");
+            b.AddAttribute(4, "id", InlineEditId);
+            b.AddAttribute(5, "onblur", EventCallback.Factory.Create<FocusEventArgs>(this,
+                (FocusEventArgs e) => CommitInlineEdit(tb)));
+            // NOTE: no AddElementReferenceCapture here — toggling that frame
+            // in a code-built tree triggers a Blazor diff crash
+            // ("Unexpected frame type during RemoveOldFrame: ElementReferenceCapture").
+        }
+        int seq = 10;
+        foreach (var para in tb.Paragraphs)
+        {
+            b.OpenElement(seq++, "div");
+            b.AddAttribute(seq++, "class", "para");
+            var pa = para.Style.TextAlign;
+            if (!string.IsNullOrEmpty(pa)) b.AddAttribute(seq++, "style", $"text-align:{pa.ToLower()};");
+            foreach (var run in para.Runs)
+            {
+                var rs = run.Style;
+                var rsb = new System.Text.StringBuilder();
+                if (!string.IsNullOrEmpty(rs.FontFamily)) rsb.Append($"font-family:{rs.FontFamily};");
+                if (!string.IsNullOrEmpty(rs.FontSize))   rsb.Append($"font-size:{rs.FontSize};");
+                if (!string.IsNullOrEmpty(rs.FontWeight)) rsb.Append($"font-weight:{rs.FontWeight};");
+                if (!string.IsNullOrEmpty(rs.FontStyle))  rsb.Append($"font-style:{rs.FontStyle};");
+                if (!string.IsNullOrEmpty(rs.Color))      rsb.Append($"color:{rs.Color};");
+                if (!string.IsNullOrEmpty(rs.TextDecoration)) rsb.Append($"text-decoration:{rs.TextDecoration.ToLower()};");
+                var raw = run.Value ?? "";
+                var isExpr = !isEditing && _prettyExpr && raw.StartsWith("=");
+                if (isExpr) rsb.Append("color:#0a6cb3;font-style:italic;");
+                b.OpenElement(seq++, "span");
+                if (rsb.Length > 0) b.AddAttribute(seq++, "style", rsb.ToString());
+                b.AddContent(seq++, isExpr ? PrettyExpr(raw) : raw);
+                b.CloseElement();
+            }
+            b.CloseElement();
+        }
+        b.CloseElement();
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex FieldRe =
+        new(@"^=\s*Fields!(\w+)\.Value\s*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex ParamRe =
+        new(@"^=\s*Parameters!(\w+)\.Value\s*$", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex AggRe =
+        new(@"^=\s*(Sum|Avg|Count|Max|Min|First|Last)\s*\(\s*Fields!(\w+)\.Value(?:\s*,[^)]*)?\)\s*$",
+            System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>SSRS report-viewer style placeholder for an expression.</summary>
+    private static string PrettyExpr(string raw)
+    {
+        var m = FieldRe.Match(raw);
+        if (m.Success) return $"[{m.Groups[1].Value}]";
+        m = ParamRe.Match(raw);
+        if (m.Success) return $"«{m.Groups[1].Value}»";
+        m = AggRe.Match(raw);
+        if (m.Success) return $"[{m.Groups[1].Value}({m.Groups[2].Value})]";
+        return "«expr»";
+    }
+
+    private void RenderImage(RenderTreeBuilder b, ImageItem img)
+    {
+        if (string.Equals(img.Source, "Embedded", StringComparison.OrdinalIgnoreCase)
+            && State.Report != null && !string.IsNullOrEmpty(img.Value))
+        {
+            var ei = State.Report.EmbeddedImages.FirstOrDefault(e => e.Name == img.Value);
+            if (ei != null && !string.IsNullOrEmpty(ei.ImageData))
+            {
+                var fit = img.Sizing switch
+                {
+                    "FitProportional" => "contain",
+                    "Fit"             => "fill",
+                    "Clip"            => "none",
+                    _                 => "contain"
+                };
+                b.OpenElement(0, "img");
+                b.AddAttribute(1, "src", ei.DataUrl);
+                b.AddAttribute(2, "alt", img.Value);
+                b.AddAttribute(3, "draggable", "false");
+                b.AddAttribute(4, "style",
+                    $"width:100%;height:100%;object-fit:{fit};pointer-events:none;");
+                b.CloseElement();
+                return;
+            }
+        }
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "image-stub");
+        b.AddContent(2, $"🖼 {img.Value}");
+        b.CloseElement();
+    }
+
+    private void RenderTablix(RenderTreeBuilder b, TablixItem tx)
+    {
+        var cols = tx.Columns;
+        var rows = tx.Rows;
+        if (cols.Count == 0 || rows.Count == 0)
+        {
+            b.OpenElement(0, "div");
+            b.AddAttribute(1, "class", "tablix-stub");
+            b.AddContent(2, $"⊞ Tablix {tx.Name} (empty)");
+            b.CloseElement();
+            return;
+        }
+        var colTpl = string.Join(" ", cols.Select(c => $"{c.Width.Px:0.##}px"));
+        var rowTpl = string.Join(" ", rows.Select(r => $"{r.Height.Px:0.##}px"));
+        b.OpenElement(0, "div");
+        b.AddAttribute(1, "class", "tablix-grid");
+        b.AddAttribute(2, "data-tablix-name", tx.Name);
+        b.AddAttribute(3, "style", $"display:grid;grid-template-columns:{colTpl};grid-template-rows:{rowTpl};width:100%;height:100%;");
+
+        int seq = 10;
+        for (int ri = 0; ri < rows.Count; ri++)
+        {
+            var cells = rows[ri].Cells;
+            for (int ci = 0; ci < Math.Min(cells.Count, cols.Count); ci++)
+            {
+                var cell = cells[ci];
+                var tb = cell.Textbox;
+                var cs = cell.ColSpan ?? 1;
+                var rs = cell.RowSpan ?? 1;
+                var cellSelected = tb != null && State.IsSelected(tb);
+                b.OpenElement(seq++, "div");
+                b.AddAttribute(seq++, "class", $"tablix-cell{(cellSelected ? " selected-cell" : "")}");
+                b.AddAttribute(seq++, "style",
+                    $"grid-column:{ci + 1} / span {cs};grid-row:{ri + 1} / span {rs};");
+                if (tb != null)
+                {
+                    var theTb = tb;
+                    b.AddAttribute(seq++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                        e => OnCellClick(theTb, e)));
+                    b.AddEventStopPropagationAttribute(seq++, "onclick", true);
+                    b.AddAttribute(seq++, "ondblclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                        e => OnItemDoubleClick(theTb)));
+                    b.AddEventStopPropagationAttribute(seq++, "ondblclick", true);
+                    b.AddAttribute(seq++, "title", theTb.Name);
+                    RenderTextbox(b, theTb);
+                }
+                b.CloseElement();
+            }
+        }
+        b.CloseElement();
+    }
+
+    private void OnCellClick(Textbox tb, MouseEventArgs e)
+    {
+        State.Select(tb, additive: e.ShiftKey || e.CtrlKey);
+    }
+
+    private RenderFragment RenderTablixHandles(TablixItem tx) => __builder =>
+    {
+        var cols = tx.Columns;
+        var rows = tx.Rows;
+        if (cols.Count == 0 || rows.Count == 0) return;
+
+        var leftPx = tx.Left.Px;
+        var topPx  = tx.Top.Px;
+
+        __builder.OpenElement(0, "div");
+        __builder.AddAttribute(1, "class", "tablix-handles");
+        __builder.AddAttribute(2, "data-tablix-name", tx.Name);
+        __builder.AddAttribute(3, "style", $"left:{leftPx:0.##}px;top:{topPx:0.##}px;width:{tx.Width.Px:0.##}px;height:{tx.Height.Px:0.##}px;");
+
+        int seq = 10;
+        double cumX = 0;
+        for (int i = 0; i < cols.Count - 1; i++)
+        {
+            cumX += cols[i].Width.Px;
+            __builder.OpenElement(seq++, "div");
+            __builder.AddAttribute(seq++, "class", "tablix-handle col-handle");
+            __builder.AddAttribute(seq++, "data-axis", "col");
+            __builder.AddAttribute(seq++, "data-index", i);
+            __builder.AddAttribute(seq++, "style", $"left:{cumX - 2:0.##}px;");
+            __builder.CloseElement();
+        }
+        double cumY = 0;
+        for (int i = 0; i < rows.Count - 1; i++)
+        {
+            cumY += rows[i].Height.Px;
+            __builder.OpenElement(seq++, "div");
+            __builder.AddAttribute(seq++, "class", "tablix-handle row-handle");
+            __builder.AddAttribute(seq++, "data-axis", "row");
+            __builder.AddAttribute(seq++, "data-index", i);
+            __builder.AddAttribute(seq++, "style", $"top:{cumY - 2:0.##}px;");
+            __builder.CloseElement();
+        }
+        __builder.CloseElement();
+    };
+
+    private void OnItemClick(ReportItem it, MouseEventArgs e)
+    {
+        if (_editingId == ItemId(it)) return;
+        _ctxMenu = null;
+        State.Select(it, additive: e.ShiftKey || e.CtrlKey);
+    }
+
+    private async Task OnItemDoubleClick(ReportItem it)
+    {
+        if (it is Textbox tb)
+        {
+            // Open a proper modal editor instead of inline-editing in a tiny cell.
+            _editTextbox = tb;
+            _editBuffer = tb.PrimaryText ?? "";
+            State.Select(tb);
+            await InvokeAsync(StateHasChanged);
+            try { await JS.InvokeVoidAsync("ReportEditor.focusElement", _modalRef); } catch { }
+        }
+    }
+
+    private void CommitTextEdit()
+    {
+        if (_editTextbox is { } tb)
+        {
+            var text = _editBuffer ?? "";
+            State.Mutate(() => tb.PrimaryText = text);
+        }
+        _editTextbox = null;
+        _editBuffer = "";
+        StateHasChanged();
+    }
+
+    private void CancelTextEdit()
+    {
+        _editTextbox = null;
+        _editBuffer = "";
+        StateHasChanged();
+    }
+
+    private void OnEditorKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") CancelTextEdit();
+        else if (e.Key == "Enter" && (e.CtrlKey || e.MetaKey)) CommitTextEdit();
+    }
+
+    private void OnItemContextMenu(ReportItem it, MouseEventArgs e)
+    {
+        if (!State.IsSelected(it)) State.Select(it);
+        _ctxMenu = new CtxMenu(e.ClientX, e.ClientY);
+    }
+
+    private async Task CtxAction(string action)
+    {
+        _ctxMenu = null;
+        switch (action)
+        {
+            case "cut":       await Cut(); break;
+            case "copy":      Copy(); break;
+            case "paste":     await Paste(); break;
+            case "duplicate": Duplicate(); break;
+            case "delete":    DeleteSelected(); break;
+            case "front":     LayerSelected(+1000); break;
+            case "back":      LayerSelected(-1000); break;
+        }
+    }
+
+    private async Task CommitInlineEdit(Textbox tb)
+    {
+        try
+        {
+            var text = await JS.InvokeAsync<string>("ReportEditor.getElementTextById", InlineEditId);
+            State.Mutate(() => tb.PrimaryText = text ?? "");
+        }
+        catch { }
+        _editingId = null;
+        StateHasChanged();
+    }
+
+    private async Task OnCanvasClick(MouseEventArgs e)
+    {
+        _ctxMenu = null;
+        // If we just finished a rubber-band drag, the synthetic click that
+        // follows must not clear the selection we built.
+        if ((DateTime.UtcNow - _lastRubberBand).TotalMilliseconds < 300) return;
+        if (State.PlacingKind is { } kind && State.Report != null && State.CurrentContainer != null)
+        {
+            var px = e.OffsetX / _zoom;
+            var py = e.OffsetY / _zoom;
+            var left = SsrsUnit.FromMm(px / 96.0 * 25.4);
+            var top  = SsrsUnit.FromMm(py / 96.0 * 25.4);
+
+            var name = State.UniqueName(kind);
+            System.Xml.Linq.XElement xml = kind switch
+            {
+                "Textbox"   => ItemFactory.Textbox(name, left, top, text: "Text"),
+                "Image"     => ItemFactory.Image(name, left, top),
+                "Rectangle" => ItemFactory.Rectangle(name, left, top),
+                "Line"      => ItemFactory.Line(name, left, top),
+                "Tablix"    => ItemFactory.Tablix(name, left, top),
+                "Subreport" => ItemFactory.Subreport(name, left, top),
+                _ => ItemFactory.Textbox(name, left, top)
+            };
+            ReportItem? created = null;
+            State.Mutate(() => created = State.Report!.AddItemTo(State.CurrentContainer, xml));
+            if (created != null) State.Select(created);
+            State.CancelPlacing();
+            return;
+        }
+        State.Select(null);
+        await Task.CompletedTask;
+    }
+
+    // ---------- cut/copy/paste/duplicate/delete ----------
+
+    private async Task Cut()
+    {
+        if (State.SelectedItems.Count == 0) return;
+        Copy();
+        DeleteSelected();
+    }
+
+    private void Copy()
+    {
+        if (State.SelectedItems.Count == 0) return;
+        State.Clipboard.Clear();
+        foreach (var it in State.SelectedItems)
+            State.Clipboard.Add(new System.Xml.Linq.XElement(it.Xml));
+        // Best-effort system clipboard mirror — won't survive Blazor circuit boundary
+        // but lets you paste between browser tabs of the same editor.
+        try
+        {
+            var xml = string.Join("\n", State.SelectedItems.Select(i => i.Xml.ToString()));
+            _ = JS.InvokeVoidAsync("navigator.clipboard.writeText",
+                $"<RdlItems>\n{xml}\n</RdlItems>");
+        }
+        catch { }
+    }
+
+    private async Task Paste()
+    {
+        if (State.Report == null || State.CurrentContainer == null) return;
+        // Prefer in-memory clipboard. Otherwise try system clipboard.
+        var sources = State.Clipboard.Count > 0
+            ? State.Clipboard.Select(x => new System.Xml.Linq.XElement(x)).ToList()
+            : await ReadClipboardItems();
+        if (sources.Count == 0) return;
+
+        var created = new List<ReportItem>();
+        State.Mutate(() =>
+        {
+            foreach (var src in sources)
+            {
+                var kind = src.Name.LocalName;
+                var name = State.UniqueName(kind);
+                var clone = ItemFactory.Duplicate(src, name,
+                    SsrsUnit.FromMm(5), SsrsUnit.FromMm(5));
+                created.Add(State.Report.AddItemTo(State.CurrentContainer, clone));
+            }
+        });
+        State.SelectMany(created);
+    }
+
+    private async Task<List<System.Xml.Linq.XElement>> ReadClipboardItems()
+    {
+        try
+        {
+            var text = await JS.InvokeAsync<string>("navigator.clipboard.readText");
+            if (string.IsNullOrWhiteSpace(text) || !text.TrimStart().StartsWith("<")) return new();
+            // Parse and find children of <RdlItems>.
+            var doc = System.Xml.Linq.XElement.Parse(text);
+            // Re-namespace bare elements to the RDL namespace if needed.
+            var items = doc.Elements().Select(e =>
+                e.Name.Namespace == System.Xml.Linq.XNamespace.None
+                    ? new System.Xml.Linq.XElement(Ns.R + e.Name.LocalName, e.Attributes(), e.Nodes())
+                    : new System.Xml.Linq.XElement(e)).ToList();
+            return items;
+        }
+        catch { return new(); }
+    }
+
+    private void Duplicate()
+    {
+        if (State.Report == null || State.CurrentContainer == null || State.SelectedItems.Count == 0) return;
+        var items = State.SelectedItems.ToList();
+        var created = new List<ReportItem>();
+        State.Mutate(() =>
+        {
+            foreach (var it in items)
+            {
+                var name = State.UniqueName(it.Kind);
+                var clone = ItemFactory.Duplicate(it.Xml, name,
+                    SsrsUnit.FromMm(5), SsrsUnit.FromMm(5));
+                created.Add(State.Report.AddItemTo(State.CurrentContainer, clone));
+            }
+        });
+        State.SelectMany(created);
+    }
+
+    private void DeleteSelected()
+    {
+        if (State.SelectedItems.Count == 0) return;
+        var items = State.SelectedItems.ToList();
+        State.Mutate(() => { foreach (var it in items) it.Xml.Remove(); });
+        State.Select(null);
+    }
+
+    private void LayerSelected(int delta)
+    {
+        if (State.SelectedItems.Count == 0) return;
+        var items = State.SelectedItems.ToList();
+        State.Mutate(() => { foreach (var i in items) i.ZIndex += delta; });
+    }
+
+    // ---------- JS module installation ----------
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (State.Report == null) return;
+        if (!_modulesInstalled)
+        {
+            _self ??= DotNetObjectReference.Create(this);
+            _dragModule ??= await JS.InvokeAsync<IJSObjectReference>("import", "./js/drag.js");
+            await _dragModule.InvokeVoidAsync("installRubberBand", _canvasEl, _self);
+            await _dragModule.InvokeVoidAsync("installTablixResize", _canvasEl, _self);
+            _modulesInstalled = true;
+        }
+        // (Re-)bind tablix handles after each render since the gridline DOM changes.
+        if (_dragModule != null)
+            await _dragModule.InvokeVoidAsync("rebindTablixHandles", _canvasEl);
+    }
+
+    [JSInvokable]
+    public void SelectInRect(double xPx, double yPx, double wPx, double hPx)
+    {
+        if (State.Report == null) return;
+        _lastRubberBand = DateTime.UtcNow;
+        var x1 = xPx / _zoom;
+        var y1 = yPx / _zoom;
+        var x2 = x1 + wPx / _zoom;
+        var y2 = y1 + hPx / _zoom;
+        var picked = new List<ReportItem>();
+        foreach (var it in State.CurrentItems)
+        {
+            var il = it.Left.Px;
+            var itp = it.Top.Px;
+            var ir = il + it.Width.Px;
+            var ib = itp + it.Height.Px;
+            if (ir >= x1 && il <= x2 && ib >= y1 && itp <= y2) picked.Add(it);
+        }
+        if (picked.Count > 0) State.SelectMany(picked);
+        else State.Select(null);
+    }
+
+    private TablixItem? FindEnclosingTablix(ReportItem? it)
+    {
+        if (it == null || State.Report == null) return null;
+        if (it is TablixItem tx) return tx;
+        // Walk up the XElement chain to find a <Tablix> ancestor.
+        var p = it.Xml.Parent;
+        while (p != null)
+        {
+            if (p.Name.LocalName == "Tablix")
+            {
+                // Find the wrapper in the current scope.
+                foreach (var ci in State.CurrentItems)
+                    if (ci is TablixItem ct && ReferenceEquals(ct.Xml, p))
+                        return ct;
+                return new TablixItem(p);
+            }
+            p = p.Parent;
+        }
+        return null;
+    }
+
+    [JSInvokable]
+    public void CommitTablixResize(string tablixName, string axis, int index, double deltaPx)
+    {
+        if (State.Report == null) return;
+        var tx = State.CurrentItems.OfType<TablixItem>().FirstOrDefault(x => x.Name == tablixName);
+        if (tx == null) return;
+        var deltaMm = deltaPx / 96.0 * 25.4;
+        State.Mutate(() =>
+        {
+            if (axis == "col")
+            {
+                var cols = tx.Columns;
+                if (index < 0 || index >= cols.Count) return;
+                var c = cols[index];
+                var newMm = Math.Max(2, c.Width.Mm + deltaMm);
+                c.Width = c.Width.WithMm(newMm);
+                tx.Width = tx.Width.WithMm(tx.TotalColMm);
+            }
+            else
+            {
+                var rows = tx.Rows;
+                if (index < 0 || index >= rows.Count) return;
+                var r = rows[index];
+                var newMm = Math.Max(2, r.Height.Mm + deltaMm);
+                r.Height = r.Height.WithMm(newMm);
+                tx.Height = tx.Height.WithMm(tx.TotalRowMm);
+            }
+        });
+    }
+
+    [JSInvokable]
+    public Task OnShortcutPaste() => Paste();
+
+    [JSInvokable]
+    public Task OnShortcutCopy() { Copy(); return Task.CompletedTask; }
+
+    [JSInvokable]
+    public Task OnShortcutCut() => Cut();
+
+    private string RtToolbarStyle(Textbox tb)
+        => $"left:{tb.Left.Px:0.##}px;top:{Math.Max(0, tb.Top.Px - 36):0.##}px;";
+
+    private void Rt(char which)
+    {
+        if (State.Selected is not Textbox tb) return;
+        State.Mutate(() =>
+        {
+            // Toggle on the first run of the first paragraph (simple model — full
+            // selection-aware rich-text is a different beast).
+            var run = tb.Paragraphs.FirstOrDefault()?.Runs.FirstOrDefault();
+            if (run == null) return;
+            switch (which)
+            {
+                case 'b':
+                    run.Style.FontWeight = run.Style.FontWeight == "Bold" ? null : "Bold";
+                    break;
+                case 'i':
+                    run.Style.FontStyle = run.Style.FontStyle == "Italic" ? null : "Italic";
+                    break;
+                case 'u':
+                    run.Style.TextDecoration = run.Style.TextDecoration == "Underline" ? null : "Underline";
+                    break;
+            }
+        });
+    }
+
+    private void RtColor(string? color)
+    {
+        if (State.Selected is not Textbox tb || string.IsNullOrEmpty(color)) return;
+        State.Mutate(() =>
+        {
+            var run = tb.Paragraphs.FirstOrDefault()?.Runs.FirstOrDefault();
+            if (run != null) run.Style.Color = color;
+        });
+    }
+
+    private void RtAlign(string align)
+    {
+        if (State.Selected is not Textbox tb) return;
+        State.Mutate(() =>
+        {
+            var para = tb.Paragraphs.FirstOrDefault();
+            if (para != null) para.Style.TextAlign = align;
+        });
+    }
+
+    private List<double> ComputePageBreaks(Report r)
+    {
+        var list = new List<double>();
+        if (State.Scope != EditorState.EditScope.Body) return list;
+        // Page-content height in mm = PageHeight - top - bottom - header - footer.
+        var pageMm = r.PageHeight.Mm - r.MarginTop.Mm - r.MarginBottom.Mm
+                     - (r.PageHeader?.Element(Ns.R + "Height")?.Value is { } hh ? SsrsUnit.Parse(hh).Mm : 0)
+                     - (r.PageFooter?.Element(Ns.R + "Height")?.Value is { } ff ? SsrsUnit.Parse(ff).Mm : 0);
+        if (pageMm < 10) return list;
+        var bodyMm = r.BodyHeight.Mm;
+        var y = pageMm;
+        while (y < bodyMm)
+        {
+            list.Add(SsrsUnit.FromMm(y).Px);
+            y += pageMm;
+        }
+        return list;
+    }
+
+    // ---------- finder ----------
+    private bool _finderVisible;
+    private string _finderText = "";
+    private ElementReference _finderRef;
+
+    public async Task ShowFinder()
+    {
+        _finderVisible = true;
+        _finderText = "";
+        await InvokeAsync(StateHasChanged);
+        try { await JS.InvokeVoidAsync("ReportEditor.focusElement", _finderRef); } catch { }
+    }
+
+    public void HideFinder() { _finderVisible = false; _finderText = ""; StateHasChanged(); }
+
+    private void OnFinderInput(ChangeEventArgs e) => _finderText = e.Value?.ToString() ?? "";
+
+    private void OnFinderKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape") HideFinder();
+        else if (e.Key == "Enter")
+        {
+            var first = FinderMatches().FirstOrDefault();
+            if (first != null) JumpTo(first);
+        }
+    }
+
+    private IEnumerable<ReportItem> FinderMatches()
+    {
+        if (State.Report == null || string.IsNullOrWhiteSpace(_finderText))
+            return Array.Empty<ReportItem>();
+        var t = _finderText.Trim();
+        return AllItems().Where(i =>
+            (i.Name?.Contains(t, StringComparison.OrdinalIgnoreCase) ?? false));
+    }
+
+    private IEnumerable<ReportItem> AllItems()
+    {
+        if (State.Report == null) yield break;
+        IEnumerable<ReportItem> Walk(IEnumerable<ReportItem> xs)
+        {
+            foreach (var x in xs)
+            {
+                yield return x;
+                if (x is RectangleItem rc)
+                    foreach (var c in Walk(rc.Children)) yield return c;
+            }
+        }
+        if (State.Report.Body != null)
+            foreach (var x in Walk(State.Report.ItemsIn(State.Report.Body))) yield return x;
+        if (State.Report.PageHeader != null)
+            foreach (var x in Walk(State.Report.ItemsIn(State.Report.PageHeader))) yield return x;
+        if (State.Report.PageFooter != null)
+            foreach (var x in Walk(State.Report.ItemsIn(State.Report.PageFooter))) yield return x;
+    }
+
+    private void JumpTo(ReportItem it)
+    {
+        State.Select(it);
+        HideFinder();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try { if (_dragModule != null) await _dragModule.DisposeAsync(); } catch { }
+        _self?.Dispose();
+    }
+}

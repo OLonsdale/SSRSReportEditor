@@ -1,0 +1,98 @@
+@inject EditorState State
+@implements IDisposable
+
+@if (State.Report is { } r)
+{
+    <div class="report-panel">
+        <fieldset>
+            <legend>Report</legend>
+            <div class="row stack"><label>Description</label>
+                <textarea rows="2"
+                          @oninput="@(e => State.Mutate(() => r.Description = e.Value?.ToString()))">@r.Description</textarea>
+            </div>
+            <div class="row"><label>Language</label>
+                <input value="@r.Language" placeholder="en-US"
+                       @oninput="@(e => State.Mutate(() => r.Language = e.Value?.ToString()))" />
+            </div>
+            <div class="row"><label>Consume whitespace</label>
+                <input type="checkbox" checked="@r.ConsumeContainerWhitespace"
+                       @onchange="@(e => State.Mutate(() => r.ConsumeContainerWhitespace = (bool)(e.Value ?? false)))" />
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Page</legend>
+            <div class="row"><label>Width</label>
+                <UnitInput Value="@r.PageWidth" OnChange="v => State.Mutate(() => r.PageWidth = v)" />
+            </div>
+            <div class="row"><label>Height</label>
+                <UnitInput Value="@r.PageHeight" OnChange="v => State.Mutate(() => r.PageHeight = v)" />
+            </div>
+        </fieldset>
+
+        <fieldset>
+            <legend>Body</legend>
+            <div class="row"><label>Width</label>
+                <UnitInput Value="@r.BodyWidth" OnChange="v => State.Mutate(() => r.BodyWidth = v)" />
+            </div>
+            <div class="row"><label>Height</label>
+                <UnitInput Value="@r.BodyHeight" OnChange="v => State.Mutate(() => r.BodyHeight = v)" />
+            </div>
+        </fieldset>
+
+        @if (r.PageHeader != null)
+        {
+            <fieldset>
+                <legend>Page header</legend>
+                <div class="row"><label>Height</label>
+                    <UnitInput Value="@r.PageHeaderHeight" OnChange="v => State.Mutate(() => r.PageHeaderHeight = v)" />
+                </div>
+                <button class="del" @onclick="RemoveHeader">Remove header</button>
+            </fieldset>
+        }
+        @if (r.PageFooter != null)
+        {
+            <fieldset>
+                <legend>Page footer</legend>
+                <div class="row"><label>Height</label>
+                    <UnitInput Value="@r.PageFooterHeight" OnChange="v => State.Mutate(() => r.PageFooterHeight = v)" />
+                </div>
+                <button class="del" @onclick="RemoveFooter">Remove footer</button>
+            </fieldset>
+        }
+
+        <fieldset>
+            <legend>Code (VB)</legend>
+            <textarea rows="10" class="code"
+                      placeholder="Public Function Foo() As Integer&#10;  Return 1&#10;End Function"
+                      @oninput="@(e => State.Mutate(() => r.Code = e.Value?.ToString()))">@r.Code</textarea>
+            <small class="muted">Custom code accessible as <code>Code.Foo()</code> in expressions.</small>
+        </fieldset>
+    </div>
+}
+else
+{
+    <div class="empty muted">Load a report first.</div>
+}
+
+@code {
+    protected override void OnInitialized() => State.Changed += Tick;
+    public void Dispose() => State.Changed -= Tick;
+    private void Tick() => InvokeAsync(StateHasChanged);
+
+    private void RemoveHeader()
+    {
+        if (State.Report?.PageHeader is null) return;
+        State.Mutate(() => State.Report.PageHeader!.Remove());
+        if (State.Scope == EditorState.EditScope.PageHeader)
+            State.SetScope(EditorState.EditScope.Body);
+    }
+
+    private void RemoveFooter()
+    {
+        if (State.Report?.PageFooter is null) return;
+        State.Mutate(() => State.Report.PageFooter!.Remove());
+        if (State.Scope == EditorState.EditScope.PageFooter)
+            State.SetScope(EditorState.EditScope.Body);
+    }
+}

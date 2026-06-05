@@ -1,0 +1,136 @@
+@inject EditorState State
+
+<div class="find-replace" @onclick:stopPropagation="true">
+    <div class="row">
+        <input type="text" placeholder="Find…" value="@_find"
+               @oninput="@(e => _find = e.Value?.ToString() ?? "")" />
+        <button @onclick="FindAll" disabled="@(string.IsNullOrEmpty(_find))">Find</button>
+        <button class="close" @onclick="OnClose" title="Close (Esc)">×</button>
+    </div>
+    @if (Mode == FindMode.Replace)
+    {
+        <div class="row">
+            <input type="text" placeholder="Replace with…" value="@_replace"
+                   @oninput="@(e => _replace = e.Value?.ToString() ?? "")" />
+            <button @onclick="ReplaceAll" disabled="@(string.IsNullOrEmpty(_find))">Replace all</button>
+        </div>
+    }
+    <div class="opts">
+        <label><input type="checkbox" @bind="_caseSensitive" /> Match case</label>
+        <label><input type="checkbox" @bind="_regex" /> Regex</label>
+    </div>
+    @if (_lastCount.HasValue)
+    {
+        <div class="status">@_lastCount.Value match@(_lastCount == 1 ? "" : "es").</div>
+    }
+    @if (_matches.Count > 0)
+    {
+        <div class="matches">
+            @foreach (var (item, idx) in _matches.Select((m, i) => (m, i)))
+            {
+                <div class="match" @onclick="() => State.Select(item)">
+                    <span class="kind">@item.Kind</span> @item.Name
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    public enum FindMode { Find, Replace }
+    [Parameter] public FindMode Mode { get; set; } = FindMode.Find;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private string _find = "";
+    private string _replace = "";
+    private bool _caseSensitive;
+    private bool _regex;
+    private int? _lastCount;
+    private List<ReportItem> _matches = new();
+
+    private System.Text.RegularExpressions.Regex? CompileRegex()
+    {
+        if (string.IsNullOrEmpty(_find)) return null;
+        try
+        {
+            var opts = _caseSensitive
+                ? System.Text.RegularExpressions.RegexOptions.None
+                : System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+            return new System.Text.RegularExpressions.Regex(
+                _regex ? _find : System.Text.RegularExpressions.Regex.Escape(_find), opts);
+        }
+        catch { return null; }
+    }
+
+    private void FindAll()
+    {
+        _matches.Clear();
+        _lastCount = 0;
+        var re = CompileRegex();
+        if (re == null || State.Report == null) { _lastCount = 0; return; }
+        var count = 0;
+        foreach (var it in AllItems())
+        {
+            var hits = 0;
+            if (it is Textbox tb)
+            {
+                foreach (var p in tb.Paragraphs)
+                foreach (var r in p.Runs)
+                    hits += re.Matches(r.Value).Count;
+            }
+            if (it.Name != null) hits += re.Matches(it.Name).Count;
+            if (hits > 0) { _matches.Add(it); count += hits; }
+        }
+        _lastCount = count;
+    }
+
+    private void ReplaceAll()
+    {
+        var re = CompileRegex();
+        if (re == null || State.Report == null) return;
+        var count = 0;
+        State.Mutate(() =>
+        {
+            foreach (var it in AllItems())
+            {
+                if (it is Textbox tb)
+                {
+                    foreach (var p in tb.Paragraphs)
+                    foreach (var r in p.Runs)
+                    {
+                        var n = re.Matches(r.Value).Count;
+                        if (n > 0) { r.Value = re.Replace(r.Value, _replace); count += n; }
+                    }
+                }
+            }
+        });
+        _lastCount = count;
+        FindAll();
+    }
+
+    private IEnumerable<ReportItem> AllItems()
+    {
+        if (State.Report == null) yield break;
+        IEnumerable<ReportItem> Walk(IEnumerable<ReportItem> xs)
+        {
+            foreach (var x in xs)
+            {
+                yield return x;
+                if (x is RectangleItem rc)
+                    foreach (var c in Walk(rc.Children)) yield return c;
+                if (x is TablixItem tx)
+                {
+                    foreach (var row in tx.Rows)
+                    foreach (var cell in row.Cells)
+                        if (cell.Textbox != null) yield return cell.Textbox;
+                }
+            }
+        }
+        if (State.Report.Body != null)
+            foreach (var x in Walk(State.Report.ItemsIn(State.Report.Body))) yield return x;
+        if (State.Report.PageHeader != null)
+            foreach (var x in Walk(State.Report.ItemsIn(State.Report.PageHeader))) yield return x;
+        if (State.Report.PageFooter != null)
+            foreach (var x in Walk(State.Report.ItemsIn(State.Report.PageFooter))) yield return x;
+    }
+}

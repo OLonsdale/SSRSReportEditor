@@ -1,0 +1,174 @@
+@inject EditorState State
+@implements IDisposable
+
+<div class="validation-panel">
+    @if (State.Report is { } r)
+    {
+        var issues = Validate(r).ToList();
+        <fieldset>
+            <legend>Validation (@issues.Count)</legend>
+            @if (issues.Count == 0)
+            {
+                <div class="ok">All checks passed ✓</div>
+            }
+            else
+            {
+                <ul class="issues">
+                    @foreach (var iss in issues)
+                    {
+                        <li class="@iss.Severity.ToString().ToLower()">
+                            <span class="sev">@SevGlyph(iss.Severity)</span>
+                            <div>
+                                <div class="msg">@iss.Message</div>
+                                @if (!string.IsNullOrEmpty(iss.Location))
+                                {
+                                    <div class="loc muted">@iss.Location</div>
+                                }
+                                @if (iss.Item != null)
+                                {
+                                    <button class="goto"
+                                            @onclick="() => State.Select(iss.Item)">Select</button>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </fieldset>
+    }
+</div>
+
+@code {
+    private enum Severity { Info, Warning, Error }
+    private record Issue(Severity Severity, string Message, string? Location = null, ReportItem? Item = null);
+
+    protected override void OnInitialized() => State.Changed += Tick;
+    public void Dispose() => State.Changed -= Tick;
+    private void Tick() => InvokeAsync(StateHasChanged);
+
+    private static string SevGlyph(Severity s) => s switch
+    {
+        Severity.Error   => "✕",
+        Severity.Warning => "⚠",
+        _ => "ℹ"
+    };
+
+    private static IEnumerable<Issue> Validate(Report r)
+    {
+        // Collect names of resources.
+        var dsNames = r.DataSources.Select(x => x.Name).ToHashSet();
+        var setNames = r.DataSets.Select(x => x.Name).ToHashSet();
+        var paramNames = r.Parameters.Select(x => x.Name).ToHashSet();
+        var imageNames = r.EmbeddedImages.Select(x => x.Name).ToHashSet();
+
+        // 1) Duplicate body-item names.
+        var allItems = AllItems(r).ToList();
+        foreach (var grp in allItems.GroupBy(x => x.Name).Where(g => !string.IsNullOrEmpty(g.Key) && g.Count() > 1))
+        {
+            yield return new Issue(Severity.Warning,
+                $"Duplicate item name: '{grp.Key}' used {grp.Count()} times",
+                Item: grp.First());
+        }
+
+        // 2) Image references missing.
+        foreach (var img in allItems.OfType<ImageItem>())
+        {
+            if (string.Equals(img.Source, "Embedded", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrEmpty(img.Value) && !imageNames.Contains(img.Value))
+            {
+                yield return new Issue(Severity.Error,
+                    $"Image '{img.Name}' references missing embedded image '{img.Value}'",
+                    Item: img);
+            }
+        }
+
+        // 3) Tablix DataSet refs.
+        foreach (var tx in allItems.OfType<TablixItem>())
+        {
+            if (!string.IsNullOrEmpty(tx.DataSetName) && !setNames.Contains(tx.DataSetName))
+            {
+                yield return new Issue(Severity.Error,
+                    $"Tablix '{tx.Name}' references unknown dataset '{tx.DataSetName}'",
+                    Item: tx);
+            }
+        }
+
+        // 4) DataSet -> DataSource refs.
+        foreach (var ds in r.DataSets)
+        {
+            if (!string.IsNullOrEmpty(ds.DataSourceName) && !dsNames.Contains(ds.DataSourceName))
+            {
+                yield return new Issue(Severity.Error,
+                    $"Dataset '{ds.Name}' references unknown data source '{ds.DataSourceName}'",
+                    Location: $"DataSets / {ds.Name}");
+            }
+            if (string.IsNullOrWhiteSpace(ds.CommandText))
+            {
+                yield return new Issue(Severity.Warning,
+                    $"Dataset '{ds.Name}' has empty command text",
+                    Location: $"DataSets / {ds.Name}");
+            }
+            // QueryParameter references.
+            foreach (var qp in ds.QueryParameters)
+            {
+                var v = qp.Value ?? "";
+                const string prefix = "=Parameters!";
+                if (v.StartsWith(prefix))
+                {
+                    var rest = v.Substring(prefix.Length);
+                    var dot = rest.IndexOf('.');
+                    var pName = dot >= 0 ? rest.Substring(0, dot) : rest;
+                    if (!paramNames.Contains(pName))
+                    {
+                        yield return new Issue(Severity.Error,
+                            $"Query param '{qp.Name}' references undefined parameter '{pName}'",
+                            Location: $"DataSets / {ds.Name}");
+                    }
+                }
+            }
+        }
+
+        // 5) Textbox expressions referencing Parameters!X.
+        var paramRefRe = new System.Text.RegularExpressions.Regex(@"Parameters!(\w+)\.Value",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+        foreach (var tb in allItems.OfType<Textbox>())
+        {
+            foreach (var p in tb.Paragraphs)
+            foreach (var run in p.Runs)
+            {
+                foreach (System.Text.RegularExpressions.Match m in paramRefRe.Matches(run.Value))
+                {
+                    var pn = m.Groups[1].Value;
+                    if (!paramNames.Contains(pn))
+                    {
+                        yield return new Issue(Severity.Warning,
+                            $"Textbox '{tb.Name}' references undefined parameter '{pn}'",
+                            Item: tb);
+                    }
+                }
+            }
+        }
+
+        // 6) Empty body.
+        if (!allItems.Any())
+        {
+            yield return new Issue(Severity.Info, "Report has no items yet.");
+        }
+    }
+
+    private static IEnumerable<ReportItem> AllItems(Report r)
+    {
+        IEnumerable<ReportItem> walk(IEnumerable<ReportItem> items)
+        {
+            foreach (var it in items)
+            {
+                yield return it;
+                if (it is RectangleItem rc)
+                    foreach (var c in walk(rc.Children)) yield return c;
+            }
+        }
+        if (r.Body != null) foreach (var x in walk(r.ItemsIn(r.Body))) yield return x;
+        if (r.PageHeader != null) foreach (var x in walk(r.ItemsIn(r.PageHeader))) yield return x;
+        if (r.PageFooter != null) foreach (var x in walk(r.ItemsIn(r.PageFooter))) yield return x;
+    }
+}

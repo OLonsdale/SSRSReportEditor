@@ -1,0 +1,45 @@
+.report-panel { padding: 10px; font-size: .8rem; }
+
+fieldset {
+    border: 1px solid #3c3c3c;
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin: 0 0 10px;
+}
+legend {
+    color: #999;
+    text-transform: uppercase;
+    font-size: .68rem;
+    letter-spacing: .5px;
+    padding: 0 4px;
+}
+
+.row { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+.row label { width: 130px; color: #aaa; font-size: .72rem; }
+.row.stack { flex-direction: column; align-items: stretch; gap: 2px; }
+.row.stack label { width: auto; }
+
+input, select, textarea {
+    background: #1e1e1e; color: #d4d4d4;
+    border: 1px solid #3c3c3c; border-radius: 3px;
+    padding: 3px 6px; font-size: .78rem;
+    width: 100%; box-sizing: border-box;
+    font-family: inherit;
+}
+input[type="checkbox"] { width: auto; }
+
+textarea.code {
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: .72rem;
+    resize: vertical;
+}
+
+.del {
+    background: #5a1d1d; color: #fff;
+    border: 1px solid #7a2a2a; padding: 3px 10px;
+    border-radius: 3px; cursor: pointer; font-size: .72rem;
+}
+.del:hover { background: #732424; }
+
+.muted { color: #888; }
+.empty { padding: 2rem; text-align: center; }
