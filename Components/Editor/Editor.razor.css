@@ -1,29 +1,45 @@
 .workspace {
     flex: 1;
     display: grid;
-    grid-template-columns: 280px 1fr 340px;
+    grid-template-columns:
+        var(--left-w, 280px)
+        var(--left-rz, 4px)
+        1fr
+        var(--right-rz, 4px)
+        var(--right-w, 340px);
     min-height: 0;
     background: #1e1e1e;
 }
 
-.workspace.left-collapsed {
-    grid-template-columns: 0 1fr 340px;
+.workspace.left-collapsed  { --left-w:  0; --left-rz:  0; }
+.workspace.right-collapsed { --right-w: 0; --right-rz: 0; }
+
+/* Pin tracks explicitly so collapsing one column doesn't reshuffle siblings.
+   (Don't use nth-of-type — it counts all <div> siblings, not just .pane-resizer.) */
+.left-pane          { grid-column: 1; grid-row: 1; }
+.pane-resizer.left  { grid-column: 2; grid-row: 1; }
+.center-pane        { grid-column: 3; grid-row: 1; }
+.pane-resizer.right { grid-column: 4; grid-row: 1; }
+.right-pane         { grid-column: 5; grid-row: 1; }
+
+.pane-resizer {
+    background: #2d2d30;
+    cursor: ew-resize;
+    touch-action: none;
+    transition: background .15s;
 }
+.pane-resizer:hover { background: #0e639c; }
 
-/* Pin each pane to its column so collapsing the left pane doesn't reshuffle
-   center/right into the wrong tracks. */
-.left-pane   { grid-column: 1; }
-.center-pane { grid-column: 2; }
-.right-pane  { grid-column: 3; }
-
-.left-pane {
+.left-pane, .right-pane {
     background: #252526;
-    border-right: 1px solid #3c3c3c;
-    overflow: auto;
+    overflow: hidden;
     min-height: 0;
     min-width: 0;
-    max-width: 280px;
+    display: flex;
+    flex-direction: column;
 }
+.left-pane  { border-right: 1px solid #3c3c3c; }
+.right-pane { border-left:  1px solid #3c3c3c; }
 
 .left-pane.collapsed {
     border-right: none;
@@ -31,8 +47,85 @@
     visibility: hidden;
 }
 
+.pane-header {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    background: #2d2d30;
+    border-bottom: 1px solid #3c3c3c;
+    cursor: default;
+    flex: 0 0 auto;
+    user-select: none;
+}
+.pane-title {
+    flex: 1;
+    color: #ccc;
+    font-size: .72rem;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.pane-btn {
+    background: transparent;
+    color: #aaa;
+    border: none;
+    padding: 2px 6px;
+    cursor: pointer;
+    font-size: .82rem;
+    border-radius: 2px;
+}
+.pane-btn:hover { background: #3c3c3c; color: #fff; }
+
+.pane-body {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+}
+
+/* Floating mode: pop the pane out of the grid via fixed positioning. */
+.left-pane.floating, .right-pane.floating {
+    position: fixed;
+    z-index: 1000000;
+    border: 1px solid #3c3c3c;
+    border-radius: 6px;
+    box-shadow: 0 10px 32px rgba(0,0,0,.65);
+    background: #252526;
+    overflow: hidden;
+    resize: none;
+    max-width: none;
+    min-width: 220px;
+    min-height: 160px;
+}
+.left-pane.floating .pane-header, .right-pane.floating .pane-header {
+    cursor: move;
+    background: #094771;
+    color: #fff;
+}
+.left-pane.floating .pane-title, .right-pane.floating .pane-title { color: #fff; }
+.left-pane.floating { border-right: 1px solid #3c3c3c; }
+.right-pane.floating { border-left: 1px solid #3c3c3c; }
+
+.float-resize-corner {
+    position: absolute;
+    right: 0; bottom: 0;
+    width: 14px; height: 14px;
+    cursor: nwse-resize;
+    background:
+        linear-gradient(135deg,
+            transparent 0 50%,
+            #777 50% 60%,
+            transparent 60% 70%,
+            #777 70% 80%,
+            transparent 80% 100%);
+    touch-action: none;
+    z-index: 1;
+}
+
 /* ::deep so the rule reaches child components rendered into the pane. */
-.left-pane ::deep img {
+.left-pane ::deep img,
+.right-pane ::deep img {
     max-width: 100%;
     height: auto;
 }
@@ -41,13 +134,6 @@
     background: #1e1e1e;
     overflow: hidden;
     position: relative;
-    min-height: 0;
-}
-
-.right-pane {
-    background: #252526;
-    border-left: 1px solid #3c3c3c;
-    overflow: auto;
     min-height: 0;
 }
 

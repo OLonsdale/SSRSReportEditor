@@ -611,7 +611,189 @@
             __builder.CloseElement();
         }
         __builder.CloseElement();
+
+        // ---- row + column header gutters ----
+        // Heads ONLY show the label (so tiny rows don't get crushed). Buttons
+        // live in a single floating action strip that follows the current
+        // selection — this avoids overlapping heads when rows are < 20px.
+        int s = 1000;
+
+        // Top column gutter (labels only).
+        __builder.OpenElement(s++, "div");
+        __builder.AddAttribute(s++, "class", "tx-gutter tx-gutter-cols");
+        __builder.AddAttribute(s++, "style",
+            $"left:{leftPx:0.##}px;top:{topPx - 22:0.##}px;width:{tx.Width.Px:0.##}px;");
+        double cx = 0;
+        for (int i = 0; i < cols.Count; i++)
+        {
+            var ci = i;
+            var w = cols[ci].Width.Px;
+            var sel = _tablixSel.tablix == tx && _tablixSel.kind == "col" && _tablixSel.index == ci;
+            __builder.OpenElement(s++, "div");
+            __builder.AddAttribute(s++, "class", $"tx-head col{(sel ? " selected" : "")}");
+            __builder.AddAttribute(s++, "style", $"left:{cx:0.##}px;width:{w:0.##}px;");
+            __builder.AddAttribute(s++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => SelectTablixHeader(tx, "col", ci)));
+            __builder.AddEventStopPropagationAttribute(s++, "onclick", true);
+            __builder.AddContent(s++, ColLabel(ci));
+            __builder.CloseElement();
+            cx += w;
+        }
+        __builder.CloseElement();
+
+        // Left row gutter (labels only).
+        __builder.OpenElement(s++, "div");
+        __builder.AddAttribute(s++, "class", "tx-gutter tx-gutter-rows");
+        __builder.AddAttribute(s++, "style",
+            $"left:{leftPx - 22:0.##}px;top:{topPx:0.##}px;height:{tx.Height.Px:0.##}px;");
+        double cy = 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var ri = i;
+            var h = rows[ri].Height.Px;
+            var sel = _tablixSel.tablix == tx && _tablixSel.kind == "row" && _tablixSel.index == ri;
+            __builder.OpenElement(s++, "div");
+            __builder.AddAttribute(s++, "class", $"tx-head row{(sel ? " selected" : "")}");
+            __builder.AddAttribute(s++, "style", $"top:{cy:0.##}px;height:{h:0.##}px;");
+            __builder.AddAttribute(s++, "onclick", EventCallback.Factory.Create<MouseEventArgs>(this,
+                _ => SelectTablixHeader(tx, "row", ri)));
+            __builder.AddEventStopPropagationAttribute(s++, "onclick", true);
+            __builder.AddContent(s++, (ri + 1).ToString());
+            __builder.CloseElement();
+            cy += h;
+        }
+        __builder.CloseElement();
+
+        // Selected row/column band + floating action strip with the buttons.
+        if (_tablixSel.tablix == tx && _tablixSel.index >= 0)
+        {
+            if (_tablixSel.kind == "col" && _tablixSel.index < cols.Count)
+            {
+                double x = 0;
+                for (int i = 0; i < _tablixSel.index; i++) x += cols[i].Width.Px;
+                var colW = cols[_tablixSel.index].Width.Px;
+                __builder.OpenElement(s++, "div");
+                __builder.AddAttribute(s++, "class", "tx-band");
+                __builder.AddAttribute(s++, "style",
+                    $"left:{leftPx + x:0.##}px;top:{topPx:0.##}px;width:{colW:0.##}px;height:{tx.Height.Px:0.##}px;");
+                __builder.CloseElement();
+
+                // Action strip above the selected column header.
+                var ix = _tablixSel.index;
+                __builder.OpenElement(s++, "div");
+                __builder.AddAttribute(s++, "class", "tx-actions tx-actions-col");
+                __builder.AddAttribute(s++, "style",
+                    $"left:{leftPx + x + colW / 2:0.##}px;top:{topPx - 56:0.##}px;");
+                __builder.AddEventStopPropagationAttribute(s++, "onclick", true);
+                s = EmitAction(__builder, s, "‹ Left", "Move column left",
+                    ix > 0, () => MoveCol(tx, ix, ix - 1));
+                s = EmitAction(__builder, s, "Right ›", "Move column right",
+                    ix < cols.Count - 1, () => MoveCol(tx, ix, ix + 1));
+                s = EmitAction(__builder, s, "× Delete", "Delete column",
+                    cols.Count > 1, () => DeleteCol(tx, ix));
+                __builder.CloseElement();
+            }
+            else if (_tablixSel.kind == "row" && _tablixSel.index < rows.Count)
+            {
+                double y = 0;
+                for (int i = 0; i < _tablixSel.index; i++) y += rows[i].Height.Px;
+                var rowH = rows[_tablixSel.index].Height.Px;
+                __builder.OpenElement(s++, "div");
+                __builder.AddAttribute(s++, "class", "tx-band");
+                __builder.AddAttribute(s++, "style",
+                    $"left:{leftPx:0.##}px;top:{topPx + y:0.##}px;width:{tx.Width.Px:0.##}px;height:{rowH:0.##}px;");
+                __builder.CloseElement();
+
+                // Action strip to the left of the selected row.
+                var ir = _tablixSel.index;
+                __builder.OpenElement(s++, "div");
+                __builder.AddAttribute(s++, "class", "tx-actions tx-actions-row");
+                __builder.AddAttribute(s++, "style",
+                    $"left:{leftPx - 240:0.##}px;top:{topPx + y + rowH / 2 - 15:0.##}px;");
+                __builder.AddEventStopPropagationAttribute(s++, "onclick", true);
+                s = EmitAction(__builder, s, "˄ Up", "Move row up",
+                    ir > 0, () => MoveRow(tx, ir, ir - 1));
+                s = EmitAction(__builder, s, "˅ Down", "Move row down",
+                    ir < rows.Count - 1, () => MoveRow(tx, ir, ir + 1));
+                s = EmitAction(__builder, s, "× Delete", "Delete row",
+                    rows.Count > 1, () => DeleteRow(tx, ir));
+                __builder.CloseElement();
+            }
+        }
     };
+
+    private int EmitAction(RenderTreeBuilder b, int s, string glyph, string title, bool enabled, Action handler)
+    {
+        b.OpenElement(s++, "button");
+        b.AddAttribute(s++, "class", "tx-act");
+        b.AddAttribute(s++, "title", title);
+        if (!enabled)
+        {
+            b.AddAttribute(s++, "disabled", true);
+        }
+        else
+        {
+            b.AddAttribute(s++, "onclick",
+                EventCallback.Factory.Create<MouseEventArgs>(this, _ => handler()));
+            b.AddEventStopPropagationAttribute(s++, "onclick", true);
+        }
+        b.AddContent(s++, glyph);
+        b.CloseElement();
+        return s;
+    }
+
+    private static string ColLabel(int i)
+    {
+        // A, B, …, Z, AA, AB …
+        var s = "";
+        i++;
+        while (i > 0)
+        {
+            i--;
+            s = (char)('A' + (i % 26)) + s;
+            i /= 26;
+        }
+        return s;
+    }
+
+    // ---- Tablix row/column selection state ----
+    private (TablixItem? tablix, string kind, int index) _tablixSel = (null, "", -1);
+
+    private void SelectTablixHeader(TablixItem tx, string kind, int index)
+    {
+        _tablixSel = (tx, kind, index);
+        State.Select(tx);
+    }
+
+    private void ClearTablixSel() => _tablixSel = (null, "", -1);
+
+    private void MoveCol(TablixItem tx, int from, int to)
+    {
+        State.Mutate(() => tx.MoveColumn(from, to));
+        if (_tablixSel.tablix == tx && _tablixSel.kind == "col" && _tablixSel.index == from)
+            _tablixSel = (tx, "col", to);
+    }
+
+    private void MoveRow(TablixItem tx, int from, int to)
+    {
+        State.Mutate(() => tx.MoveRow(from, to));
+        if (_tablixSel.tablix == tx && _tablixSel.kind == "row" && _tablixSel.index == from)
+            _tablixSel = (tx, "row", to);
+    }
+
+    private void DeleteCol(TablixItem tx, int index)
+    {
+        State.Mutate(() => tx.RemoveColumn(index));
+        if (_tablixSel.tablix == tx && _tablixSel.kind == "col" && _tablixSel.index == index)
+            ClearTablixSel();
+    }
+
+    private void DeleteRow(TablixItem tx, int index)
+    {
+        State.Mutate(() => tx.RemoveRow(index));
+        if (_tablixSel.tablix == tx && _tablixSel.kind == "row" && _tablixSel.index == index)
+            ClearTablixSel();
+    }
 
     private void OnItemClick(ReportItem it, MouseEventArgs e)
     {

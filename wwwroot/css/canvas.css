@@ -45,7 +45,10 @@
     top: 0; left: 0;
     background: #fff;
     color: #222;
-    overflow: hidden;        /* clip items at the body edge */
+    /* overflow:visible so tablix row/column gutters that sit just OUTSIDE
+       the table aren't clipped. Items still clip their own content via
+       .canvas .item { overflow: hidden }. */
+    overflow: visible;
 }
 
 .grid {
@@ -212,6 +215,82 @@
     cursor: ns-resize;
 }
 .tablix-handle:hover { background: rgba(0,122,204,.3); }
+
+/* Row + column header strips around a selected tablix. */
+.tx-gutter {
+    position: absolute;
+    z-index: 99998;
+    pointer-events: none;
+}
+.tx-gutter-cols { height: 22px; }
+.tx-gutter-rows { width: 22px; }
+
+.tx-head {
+    position: absolute;
+    background: #eef1f6;
+    border: 1px solid #c0c8d4;
+    color: #2a4060;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto;
+    font-size: .7rem;
+    box-sizing: border-box;
+    overflow: hidden;
+    cursor: pointer;
+}
+.tx-head:hover { background: #dde6f3; }
+.tx-head.selected { background: #2174d4; color: #fff; border-color: #1457a8; }
+.tx-gutter-cols .tx-head { top: 0; height: 100%; }
+.tx-gutter-rows .tx-head { left: 0; width: 100%; }
+
+/* Floating action strip with the actual reorder/delete buttons —
+   one strip per selection, never overlaps anything. */
+.tx-actions {
+    position: absolute;
+    z-index: 100002;
+    background: #fff;
+    border: 1px solid #2174d4;
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0,0,0,.25);
+    padding: 4px 6px;
+    display: flex;
+    gap: 4px;
+    pointer-events: auto;
+}
+.tx-actions-col { transform: translateX(-50%); }
+.tx-act {
+    background: #f4f6fa;
+    color: #233;
+    border: 1px solid #c0c8d4;
+    padding: 4px 10px;
+    cursor: pointer;
+    font-size: .72rem;
+    line-height: 1.2;
+    border-radius: 4px;
+    white-space: nowrap;
+    min-width: 56px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.tx-act:hover:not(:disabled) {
+    background: #2174d4;
+    color: #fff;
+    border-color: #1457a8;
+}
+.tx-act:disabled { color: #aab; background: #f8f9fb; cursor: default; }
+
+/* Band highlighting the selected whole row or column. */
+.tx-band {
+    position: absolute;
+    background: rgba(33,116,212,.12);
+    border: 1px solid rgba(33,116,212,.55);
+    pointer-events: none;
+    z-index: 99997;
+    box-sizing: border-box;
+}
 
 .rt-toolbar {
     position: absolute;

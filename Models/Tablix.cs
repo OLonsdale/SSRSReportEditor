@@ -83,6 +83,76 @@ public partial class TablixItem : ReportItem
         AddHierarchyMember("TablixRowHierarchy");
     }
 
+    public void MoveColumn(int from, int to)
+    {
+        if (from == to || from < 0 || to < 0) return;
+        var colsHost = BodyXml.Element(Ns.R + "TablixColumns");
+        var colList = colsHost?.Elements(Ns.R + "TablixColumn").ToList();
+        if (colsHost == null || colList == null || from >= colList.Count || to >= colList.Count) return;
+
+        // Move the TablixColumn itself.
+        var col = colList[from];
+        col.Remove();
+        var remCols = colsHost.Elements(Ns.R + "TablixColumn").ToList();
+        if (to >= remCols.Count) colsHost.Add(col);
+        else remCols[to].AddBeforeSelf(col);
+
+        // Move the cell at index `from` in each row to index `to`.
+        foreach (var rowXml in BodyXml.Element(Ns.R + "TablixRows")?
+                                     .Elements(Ns.R + "TablixRow") ?? Enumerable.Empty<XElement>())
+        {
+            var cellsHost = rowXml.Element(Ns.R + "TablixCells");
+            var cells = cellsHost?.Elements(Ns.R + "TablixCell").ToList();
+            if (cellsHost == null || cells == null || from >= cells.Count) continue;
+            var c = cells[from];
+            c.Remove();
+            var rem = cellsHost.Elements(Ns.R + "TablixCell").ToList();
+            if (to >= rem.Count) cellsHost.Add(c);
+            else rem[to].AddBeforeSelf(c);
+        }
+
+        MoveHierarchyMember("TablixColumnHierarchy", from, to);
+    }
+
+    public void MoveRow(int from, int to)
+    {
+        if (from == to || from < 0 || to < 0) return;
+        var rowsHost = BodyXml.Element(Ns.R + "TablixRows");
+        var rowList = rowsHost?.Elements(Ns.R + "TablixRow").ToList();
+        if (rowsHost == null || rowList == null || from >= rowList.Count || to >= rowList.Count) return;
+        var row = rowList[from];
+        row.Remove();
+        var remRows = rowsHost.Elements(Ns.R + "TablixRow").ToList();
+        if (to >= remRows.Count) rowsHost.Add(row);
+        else remRows[to].AddBeforeSelf(row);
+        MoveHierarchyMember("TablixRowHierarchy", from, to);
+    }
+
+    private void MoveHierarchyMember(string hierarchyName, int from, int to)
+    {
+        var membersHost = Xml.Element(Ns.R + hierarchyName)?
+                             .Element(Ns.R + "TablixMembers");
+        var list = membersHost?.Elements(Ns.R + "TablixMember").ToList();
+        if (membersHost == null || list == null || from >= list.Count) return;
+        var m = list[from];
+        m.Remove();
+        var rem = membersHost.Elements(Ns.R + "TablixMember").ToList();
+        if (to >= rem.Count) membersHost.Add(m);
+        else rem[to].AddBeforeSelf(m);
+    }
+
+    public XElement? GetRowXml(int index)
+    {
+        var rows = BodyXml.Element(Ns.R + "TablixRows")?.Elements(Ns.R + "TablixRow").ToList();
+        return rows != null && index >= 0 && index < rows.Count ? rows[index] : null;
+    }
+
+    public XElement? GetColumnXml(int index)
+    {
+        var cols = BodyXml.Element(Ns.R + "TablixColumns")?.Elements(Ns.R + "TablixColumn").ToList();
+        return cols != null && index >= 0 && index < cols.Count ? cols[index] : null;
+    }
+
     public void RemoveColumn(int index)
     {
         var cols = BodyXml.Element(Ns.R + "TablixColumns");

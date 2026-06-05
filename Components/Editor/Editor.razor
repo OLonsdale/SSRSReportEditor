@@ -6,19 +6,37 @@
 <Toolbar OnNew="NewReport" OnOpen="OpenFile" OnSave="SaveFile" OnTogglePanel="TogglePanel"
          OnFind="ShowFind" OnPrint="DoPrint" ActivePanel="@_panel" />
 
-<div class="workspace @(_panel == LeftPanel.Hidden ? "left-collapsed" : "")">
-    <div class="left-pane @(_panel == LeftPanel.Hidden ? "collapsed" : "")">
-        @switch (_panel)
+<div class="workspace @WorkspaceClass()" @ref="_workspaceEl">
+    <div class="@LeftPaneClass()" style="@LeftPaneStyle()" @ref="_leftPaneEl">
+        <div class="pane-header" @ref="_leftHeaderEl">
+            <span class="pane-title">@_panel</span>
+            <button class="pane-btn" title="@(_leftFloating ? "Dock" : "Pop out")"
+                    @onclick="ToggleLeftFloat">@(_leftFloating ? "⊟" : "⧉")</button>
+            <button class="pane-btn" title="Close"
+                    @onclick="() => TogglePanel(_panel)">×</button>
+        </div>
+        <div class="pane-body">
+            @switch (_panel)
+            {
+                case LeftPanel.Explorer:   <Explorer />; break;
+                case LeftPanel.Outline:    <OutlinePanel />; break;
+                case LeftPanel.Report:     <ReportPanel />; break;
+                case LeftPanel.Data:       <DataPanel />; break;
+                case LeftPanel.Images:     <EmbeddedImagesPanel />; break;
+                case LeftPanel.Validate:   <ValidationPanel />; break;
+                case LeftPanel.Xml:        <XmlView />; break;
+            }
+        </div>
+        @if (_leftFloating)
         {
-            case LeftPanel.Explorer:   <Explorer />; break;
-            case LeftPanel.Outline:    <OutlinePanel />; break;
-            case LeftPanel.Report:     <ReportPanel />; break;
-            case LeftPanel.Data:       <DataPanel />; break;
-            case LeftPanel.Images:     <EmbeddedImagesPanel />; break;
-            case LeftPanel.Validate:   <ValidationPanel />; break;
-            case LeftPanel.Xml:        <XmlView />; break;
+            <div class="float-resize-corner" @ref="_leftResizeCornerEl"></div>
         }
     </div>
+
+    @if (!_leftFloating && _panel != LeftPanel.Hidden)
+    {
+        <div class="pane-resizer left" @ref="_leftResizerEl"></div>
+    }
 
     <div class="center-pane">
         @if (State.Report == null)
@@ -56,8 +74,24 @@
         }
     </div>
 
-    <div class="right-pane">
-        <Inspector />
+    @if (!_rightFloating)
+    {
+        <div class="pane-resizer right" @ref="_rightResizerEl"></div>
+    }
+
+    <div class="@RightPaneClass()" style="@RightPaneStyle()" @ref="_rightPaneEl">
+        <div class="pane-header" @ref="_rightHeaderEl">
+            <span class="pane-title">Properties</span>
+            <button class="pane-btn" title="@(_rightFloating ? "Dock" : "Pop out")"
+                    @onclick="ToggleRightFloat">@(_rightFloating ? "⊟" : "⧉")</button>
+        </div>
+        <div class="pane-body">
+            <Inspector />
+        </div>
+        @if (_rightFloating)
+        {
+            <div class="float-resize-corner" @ref="_rightResizeCornerEl"></div>
+        }
     </div>
 </div>
 
@@ -76,6 +110,20 @@
     private bool _showFind;
     private FindReplace.FindMode _findMode = FindReplace.FindMode.Find;
 
+    // Pane resizing / floating state.
+    private bool _leftFloating;
+    private bool _rightFloating;
+    private double _leftFloatX = 80, _leftFloatY = 80, _leftFloatW = 320, _leftFloatH = 480;
+    private double _rightFloatX = 600, _rightFloatY = 80, _rightFloatW = 340, _rightFloatH = 500;
+
+    private ElementReference _workspaceEl;
+    private ElementReference _leftPaneEl, _rightPaneEl;
+    private ElementReference _leftHeaderEl, _rightHeaderEl;
+    private ElementReference _leftResizerEl, _rightResizerEl;
+    private ElementReference _leftResizeCornerEl, _rightResizeCornerEl;
+    private IJSObjectReference? _panesModule;
+    private string? _lastLeftPaneState, _lastRightPaneState;
+
     // Recent files (localStorage drafts).
     private record RecentFile(string Key, string Name, long Bytes);
     private List<RecentFile> _recentFiles = new();
@@ -91,6 +139,43 @@
         State.Changed += OnStateChanged;
     }
 
+    private string WorkspaceClass()
+    {
+        var cls = new List<string>();
+        if (_panel == LeftPanel.Hidden || _leftFloating) cls.Add("left-collapsed");
+        if (_rightFloating) cls.Add("right-collapsed");
+        return string.Join(' ', cls);
+    }
+
+    private string LeftPaneClass() =>
+        "left-pane" + (_leftFloating ? " floating" : "") +
+        ((_panel == LeftPanel.Hidden && !_leftFloating) ? " collapsed" : "");
+
+    private string RightPaneClass() =>
+        "right-pane" + (_rightFloating ? " floating" : "");
+
+    private string LeftPaneStyle() => _leftFloating
+        ? $"left:{_leftFloatX:0}px;top:{_leftFloatY:0}px;width:{_leftFloatW:0}px;height:{_leftFloatH:0}px;"
+        : "";
+
+    private string RightPaneStyle() => _rightFloating
+        ? $"left:{_rightFloatX:0}px;top:{_rightFloatY:0}px;width:{_rightFloatW:0}px;height:{_rightFloatH:0}px;"
+        : "";
+
+    private async Task ToggleLeftFloat()
+    {
+        _leftFloating = !_leftFloating;
+        _lastLeftPaneState = null;  // force JS to re-bind on next render
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ToggleRightFloat()
+    {
+        _rightFloating = !_rightFloating;
+        _lastRightPaneState = null;
+        await InvokeAsync(StateHasChanged);
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (firstRender)
@@ -98,6 +183,54 @@
             _self = DotNetObjectReference.Create(this);
             await JS.InvokeVoidAsync("ReportEditor.installShortcuts", _self);
             await JS.InvokeVoidAsync("ReportEditor.installDragDrop", _self);
+            _panesModule = await JS.InvokeAsync<IJSObjectReference>("import", "./js/panes.js");
+        }
+
+        // Wire pane resizers + floating drag handlers each render. Use state
+        // strings so we don't re-bind identical handlers every tick.
+        if (_panesModule != null)
+        {
+            var leftState = $"{_leftFloating}|{_panel == LeftPanel.Hidden}";
+            if (leftState != _lastLeftPaneState)
+            {
+                _lastLeftPaneState = leftState;
+                try
+                {
+                    if (_leftFloating)
+                    {
+                        await _panesModule.InvokeVoidAsync("installFloatingDrag", _leftHeaderEl, _leftPaneEl);
+                        await _panesModule.InvokeVoidAsync("installFloatingResize", _leftResizeCornerEl, _leftPaneEl);
+                    }
+                    else if (_panel != LeftPanel.Hidden)
+                    {
+                        await _panesModule.InvokeVoidAsync("installResize", _leftResizerEl, _workspaceEl, "left");
+                    }
+                }
+                catch { _lastLeftPaneState = null; }
+            }
+
+            var rightState = $"{_rightFloating}";
+            if (rightState != _lastRightPaneState)
+            {
+                _lastRightPaneState = rightState;
+                try
+                {
+                    if (_rightFloating)
+                    {
+                        await _panesModule.InvokeVoidAsync("installFloatingDrag", _rightHeaderEl, _rightPaneEl);
+                        await _panesModule.InvokeVoidAsync("installFloatingResize", _rightResizeCornerEl, _rightPaneEl);
+                    }
+                    else
+                    {
+                        await _panesModule.InvokeVoidAsync("installResize", _rightResizerEl, _workspaceEl, "right");
+                    }
+                }
+                catch { _lastRightPaneState = null; }
+            }
+        }
+
+        if (firstRender)
+        {
             await LoadRecentList();
         }
     }
